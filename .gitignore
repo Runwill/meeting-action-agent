@@ -1,0 +1,12 @@
+node_modules
+dist
+.env
+*.log
+.DS_Store
+data/agent-store.json
+data/agent-store.json.tmp
+*.tsbuildinfo
+*.7z
+screenshots/
+视觉参考-Asme/
+design-qa.md
