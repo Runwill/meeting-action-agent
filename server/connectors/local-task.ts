@@ -9,7 +9,7 @@ export const localTaskConnector = {
     const idempotencyKey = `${runId}:${task.id}`;
     return updateAgentStore((store) => {
       const existing = Object.values(store.tasks).find((item) => item.idempotency_key === idempotencyKey);
-      if (existing) return existing;
+      if (existing) return { task: existing, reused: true as const };
       const now = new Date().toISOString();
       const created: ExternalTask = {
         id: `LTH-${randomUUID().slice(0, 8).toUpperCase()}`,
@@ -21,18 +21,24 @@ export const localTaskConnector = {
         owner: task.owner,
         due_date: task.due_date,
         priority: task.priority,
-        status: task.status,
+        priority_reason: task.priority_reason,
+        priority_evidence: task.priority_evidence,
+        // Every connector write starts as pending work. Upstream model or approval
+        // payload state must never create an already-progressed/completed task.
+        status: "todo",
         evidence: task.evidence,
+        dependencies: task.dependencies,
+        risk: task.risk,
         created_at: now,
         updated_at: now,
       };
       store.tasks[created.id] = created;
-      return created;
+      return { task: created, reused: false as const };
     });
   },
 
-  async getTask(id: string) {
-    return readAgentStore((store) => store.tasks[id] || null);
+  async getTask(id: string): Promise<ExternalTask | null> {
+    return readAgentStore<ExternalTask | null>((store) => Object.hasOwn(store.tasks, id) ? store.tasks[id] : null);
   },
 
   async listTasks(runId: string) {
@@ -41,7 +47,7 @@ export const localTaskConnector = {
 
   async updateStatus(id: string, status: ExternalTask["status"]) {
     return updateAgentStore((store) => {
-      const task = store.tasks[id];
+      const task = Object.hasOwn(store.tasks, id) ? store.tasks[id] : null;
       if (!task) return null;
       task.status = status;
       task.updated_at = new Date().toISOString();

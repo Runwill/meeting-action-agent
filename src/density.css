@@ -1,0 +1,367 @@
+/*
+ * Operational density layer.
+ *
+ * The cinematic shell may use display-scale typography, but controls, records,
+ * and task content need a stable readable scale. Keeping these rules separate
+ * also makes the density contract survive workspace layout iterations.
+ */
+:root {
+  --ui-body-size: 14px;
+  --ui-control-size: 13px;
+  --ui-label-size: 12px;
+  --ui-meta-size: 11px;
+}
+
+.section-label,
+.tagline {
+  font-size: var(--ui-label-size);
+}
+
+.engine-label,
+.composer-head,
+.composer-head button,
+.options-button,
+.analyze-button,
+.result-tools button,
+.primary-action,
+.secondary-action,
+.outcome-panel button,
+.config-actions button {
+  font-size: var(--ui-control-size);
+}
+
+.hero-copy {
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.demo-caption {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.demo-preset span {
+  font-size: 13px;
+}
+
+.demo-preset small {
+  font-size: var(--ui-label-size);
+  line-height: 1.45;
+}
+
+.notes-field textarea {
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.notes-field small,
+.options-panel label,
+.options-panel input,
+.error-message {
+  font-size: var(--ui-label-size);
+}
+
+.agent-manifesto {
+  padding-top: 36px;
+  padding-bottom: 72px;
+}
+
+.workflow-heading h2 {
+  font-size: 52px;
+  line-height: .96;
+}
+
+.workflow-heading > p:last-child {
+  margin-top: 18px;
+  font-size: var(--ui-body-size);
+  line-height: 1.6;
+}
+
+.rail-copy strong {
+  font-size: 13px;
+}
+
+.rail-copy small,
+.rail-terminal {
+  font-size: var(--ui-label-size);
+  line-height: 1.45;
+}
+
+.results-stage {
+  padding-top: 72px;
+  padding-bottom: 88px;
+}
+
+.results-header {
+  margin-bottom: 30px;
+}
+
+.manifesto .section-label,
+.results-header .section-label {
+  margin-bottom: 12px;
+}
+
+.results-header h2 {
+  font-size: 52px;
+  line-height: .98;
+}
+
+.results-header > div:first-child > p:last-child {
+  margin-top: 14px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.stats-line span,
+.stats-line .attendees strong {
+  font-size: var(--ui-label-size);
+}
+
+.agent-panel {
+  margin-top: 28px;
+  padding-top: 24px;
+}
+
+.agent-panel-head h3,
+.execution-log h3,
+.outcome-panel h3 {
+  font-size: 25px;
+}
+
+.panel-intro {
+  margin-bottom: 20px;
+  font-size: var(--ui-body-size);
+  line-height: 1.6;
+}
+
+.agent-panel-actions {
+  margin-top: 18px;
+  padding-top: 16px;
+}
+
+.agent-panel-actions p,
+.question-content label > span:first-child,
+.question-content legend {
+  font-size: var(--ui-body-size);
+}
+
+.question-row {
+  gap: 16px;
+  padding: 16px 0;
+}
+
+.question-context,
+.priority-explanation > span,
+.task-context dt,
+.approval-detail footer,
+.live-indicator,
+.event-source,
+.verification-badge,
+.created-task dt,
+.tracking-status span,
+.tracking-checked {
+  font-size: var(--ui-label-size);
+}
+
+.question-content input,
+.question-content select,
+.question-content textarea,
+.segmented-control span,
+.approval-fields input,
+.approval-fields select,
+.tracking-status select {
+  font-size: 14px;
+}
+
+.clarification-history {
+  margin-top: 18px;
+}
+
+.clarification-history summary {
+  font-size: var(--ui-body-size);
+}
+
+.clarification-history dl > div {
+  padding: 9px 0;
+}
+
+.clarification-history dt,
+.clarification-history dd,
+.priority-explanation p,
+.task-context dd,
+.execution-log p,
+.agent-workspace-context .execution-log p,
+.created-task dd,
+.verification-issues,
+.outcome-panel p {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.clarification-history dl span,
+.priority-explanation blockquote,
+.execution-log time {
+  font-size: var(--ui-meta-size);
+}
+
+.approval-task-main {
+  padding-top: 15px;
+  padding-bottom: 15px;
+}
+
+.approval-task .task-title {
+  min-height: 42px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.task-fields label > span,
+.task-detail > label > span,
+.evidence > span,
+.skill-editor label > span,
+.config-field > span,
+.inspector-metadata dt {
+  font-size: var(--ui-meta-size);
+}
+
+.task-fields input,
+.task-fields select,
+.task-detail textarea,
+.evidence blockquote,
+.skill-editor input,
+.skill-editor textarea,
+.config-field input,
+.inspector-metadata dd,
+.prompt-module-list strong,
+.prompt-module-list p,
+.inspector-content summary,
+.inspector-empty {
+  font-size: 13px;
+}
+
+.execution-log {
+  margin-top: 24px;
+  padding-top: 24px;
+}
+
+.execution-log ol {
+  margin-top: 18px;
+}
+
+.execution-log li {
+  min-height: 50px;
+}
+
+.execution-log li > div {
+  padding-bottom: 14px;
+}
+
+.tracking-stats {
+  margin: 20px 0 18px;
+}
+
+.tracking-stats > div {
+  min-height: 64px;
+}
+
+.tracking-stats span {
+  font-size: var(--ui-label-size);
+}
+
+.created-task {
+  padding: 16px;
+}
+
+.created-task-title h4 {
+  font-size: 14px;
+}
+
+.config-panel {
+  padding: 24px;
+}
+
+.config-head {
+  padding-bottom: 18px;
+}
+
+.config-head p,
+.config-status small,
+.config-status code,
+.provider-presets button,
+.provider-presets span,
+.secret-note,
+.config-feedback,
+.skill-editor > footer,
+.inspector-tabs button,
+.inspector-summary-line,
+.prompt-module-list code {
+  font-size: var(--ui-meta-size);
+}
+
+.config-status span,
+.context-intro,
+.context-demo-prompt p {
+  font-size: 12px;
+}
+
+.inspector-content pre {
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.site-footer,
+.toast {
+  font-size: var(--ui-label-size);
+}
+
+@media (max-width: 760px) {
+  .hero-copy,
+  .notes-field textarea,
+  .results-header > div:first-child > p:last-child {
+    font-size: 13px;
+  }
+
+  .tagline,
+  .section-label,
+  .demo-caption,
+  .demo-preset small,
+  .options-button,
+  .analyze-button {
+    font-size: var(--ui-label-size);
+  }
+
+  .agent-manifesto {
+    padding-top: 24px;
+    padding-bottom: 52px;
+  }
+
+  .workflow-heading h2,
+  .results-header h2 {
+    font-size: 40px;
+    line-height: 1;
+  }
+
+  .results-stage {
+    padding-top: 56px;
+    padding-bottom: 64px;
+  }
+
+  .agent-panel {
+    margin-top: 24px;
+    padding-top: 20px;
+  }
+
+  .agent-panel-head h3,
+  .execution-log h3,
+  .outcome-panel h3 {
+    font-size: 23px;
+  }
+
+  .question-row {
+    padding: 14px 0;
+  }
+
+  .config-panel {
+    padding: 22px 18px calc(18px + env(safe-area-inset-bottom));
+  }
+}
