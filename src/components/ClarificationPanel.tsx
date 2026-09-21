@@ -49,6 +49,12 @@ export function ClarificationPanel({
                 <span className="question-index" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
                 <div className="question-content">
                   {task && <p className="question-context">{task.title}</p>}
+                  {question.field === "priority" && task?.priority_reason && (
+                    <div className="question-reason">
+                      <span>判断理由</span>
+                      <p>{task.priority_reason}</p>
+                    </div>
+                  )}
                   {question.input_type === "confirm" ? (
                     <fieldset>
                       <legend>{question.prompt}</legend>
@@ -91,6 +97,12 @@ export function ClarificationPanel({
                         )}
                       </span>
                     </label>
+                  )}
+                  {task?.evidence && (
+                    <blockquote className="question-evidence">
+                      <span>参考原文</span>
+                      <p>{task.evidence}</p>
+                    </blockquote>
                   )}
                 </div>
               </div>

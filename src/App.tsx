@@ -64,8 +64,30 @@ const COMPREHENSIVE_NOTES = `会议主题：秋季版本故障复盘与发布协
 其他讨论：大家交流了下一学期是否调整会员价格，但没有形成决议，也没有安排后续行动。
 决议：先完成故障修复和登录回归，通过人工审核后再决定是否按原计划灰度。`;
 
+const CONVERSATION_NOTES = `秋季版本协调会，9月20日下午
+到场：李四、张三、王五、赵六
+
+李四：咱们还是争取 30 号先给校内用户灰度，不过昨天那个问题得先处理。老张，S1 虽然临时压住了，根因还没找到，你下周三前把故障修掉，复盘也一起交一下，触发条件和以后怎么避免都写清楚。
+赵六：这个算什么优先级？我们以前一般复盘都放低优先级，但这次又是 S1。
+李四：先别替大家定，最后优先级确认时再选。根因没弄清的话，灰度肯定有风险。
+
+王五：登录回归我来做，25 号之前给问题清单。不过得等张三先把稳定的测试环境给我，现在环境偶尔还是会断，可能会拖进度。
+张三：环境我来准备，修复后你再完整跑一遍。
+
+李四：还有公告，新登录入口得写进去，别拖太久。
+赵六：我可以先把素材收一下，但最后谁写、哪天交，今天好像还没定吧？
+李四：对，终稿出来我负责审核，具体谁完成和时间之后确认。
+
+李四：扩容报价也要跟一下，27 号前得把采购建议交出来。我和赵六之前都看过报价，不过到底谁牵头，等会后再定。
+赵六：行，我把供应商回复先转群里。
+
+王五：下学期会员价格要不要调？
+李四：今天先讨论到这儿，这件事没结论，也先不安排人跟进。
+
+最后口头结论：故障修复和登录回归完成并经过人工确认后，再决定是否按原计划灰度。`;
+
 type DemoCase = {
-  id: "comprehensive";
+  id: "comprehensive" | "conversation";
   label: string;
   caption: string;
   notes: string;
@@ -84,6 +106,16 @@ const DEMO_CASES: DemoCase[] = [
     meetingDate: "2026-09-20",
     instruction: "请结合已启用的用户 Markdown Skill 理解成员别名和优先级规则；规则冲突时等待人工选择。",
     hint: "先载入测试 Skill，让模型知道“老张”=张三，并识别 S1 与一般故障复盘之间的优先级冲突。",
+    needsUserSkill: true,
+  },
+  {
+    id: "conversation",
+    label: "真实对话式记录",
+    caption: "同样的测试点，改为多人逐句发言、追问和口语化插话",
+    notes: CONVERSATION_NOTES,
+    meetingDate: "2026-09-20",
+    instruction: "请结合已启用的用户 Markdown Skill 理解成员别名和优先级规则；从口语对话中还原任务，不要把没有结论的讨论当成行动项。",
+    hint: "覆盖点与综合测试纪要相同，但文本更接近真实会议速记。需要先载入同一份测试 Skill。",
     needsUserSkill: true,
   },
 ];
@@ -709,7 +741,7 @@ export default function App() {
             {!studioOpen ? (
               <div className="hero-actions reveal reveal-actions">
                 <button className="access-button" type="button" onClick={() => setStudioOpen(true)}>放入会议纪要</button>
-                <p className="demo-caption">一份接近真实会议的综合纪要，同时验证完整抽取、主动澄清、成员别名、优先级审核、依赖风险和非任务识别。</p>
+                <p className="demo-caption">两种写法覆盖同一组能力：一份便于核对字段，一份模拟多人逐句发言的真实会议速记。</p>
                 <div className="demo-presets" aria-label="演示输入">
                   {DEMO_CASES.map((demo) => (
                     <button
