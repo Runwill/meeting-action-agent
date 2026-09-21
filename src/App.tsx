@@ -8,6 +8,7 @@ import {
   Check,
   CirclesFour,
   DownloadSimple,
+  Eye,
   FileText,
   Key,
   ListChecks,
@@ -181,6 +182,11 @@ export default function App() {
   const [studioOpen, setStudioOpen] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [visualOpen, setVisualOpen] = useState(false);
+  const [centerShade, setCenterShade] = useState(() => {
+    const saved = Number(localStorage.getItem("meeting-action-agent.center-shade"));
+    return Number.isFinite(saved) && saved >= 0 && saved <= 0.72 ? saved : 0.08;
+  });
   const [videoPaused, setVideoPaused] = useState(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   const [toast, setToast] = useState("");
 
@@ -195,6 +201,11 @@ export default function App() {
   const configPanelRef = useRef<HTMLElement>(null);
   const toastTimer = useRef<number | undefined>(undefined);
   const runGenerationRef = useRef(0);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty("--center-shade", String(centerShade));
+    localStorage.setItem("meeting-action-agent.center-shade", String(centerShade));
+  }, [centerShade]);
 
   const closeConfig = useCallback(() => setConfigOpen(false), []);
   const closeSkills = useCallback(() => { setSkillsOpen(false); setSkillDemoPrompt(false); }, []);
@@ -707,6 +718,7 @@ export default function App() {
       <div ref={pageRef} className="page-content">
         <div className="video-layer" aria-hidden="true"><video ref={videoRef} autoPlay muted loop playsInline preload="auto" /></div>
         <div className="cinematic-mask" aria-hidden="true" />
+        <div className="center-veil" aria-hidden="true" />
         <div className="film-grain" aria-hidden="true" />
         <div className="guide guide-left" aria-hidden="true" />
         <div className="guide guide-right" aria-hidden="true" />
@@ -716,12 +728,16 @@ export default function App() {
             <a className="brand" href="#top" aria-label="会议行动智能体首页"><CirclesFour /><span>会议行动</span></a>
             <div className="nav-links"><a href="#top">纪要输入</a><a href="#workflow">执行轨道</a><a href="#results">任务结果</a></div>
             <div className="nav-actions">
+              <div className="visual-control-wrap">
+                <button className="model-trigger visual-trigger" type="button" onClick={() => setVisualOpen((open) => !open)} aria-expanded={visualOpen} aria-controls="visual-control" aria-label="调整中央画布通透度"><Eye /><span className="engine-label">通透度</span></button>
+              </div>
               <button className="model-trigger" type="button" onClick={() => setSkillsOpen(true)} aria-label="打开用户 Markdown Skill"><UsersThree /><span className="engine-label">用户 Skills</span></button>
               <button className="model-trigger" type="button" onClick={() => setConfigOpen(true)} aria-label="打开模型连接设置"><span className="engine-label"><i className={configStatus.configured ? "ai" : "unconfigured"} />{configStatus.configured ? `${configStatus.provider} · ${configStatus.model}` : "未连接模型"}</span><SlidersHorizontal /></button>
               <button className="nav-cta liquid-glass" type="button" onClick={() => setStudioOpen(true)}>放入纪要</button>
               <button ref={menuButtonRef} className="menu-button" type="button" aria-label={menuOpen ? "关闭菜单" : "打开菜单"} aria-expanded={menuOpen} aria-controls="mobile-menu" onClick={() => setMenuOpen((open) => !open)}>{menuOpen ? <X /> : <ListChecks />}</button>
             </div>
           </div>
+          {visualOpen && <div className="visual-control liquid-glass" id="visual-control" role="dialog" aria-label="中央画布通透度调节"><div className="visual-control-head"><span>中央画布通透度</span><strong>{Math.round((1 - centerShade / 0.72) * 100)}%</strong></div><input aria-label="中央画布通透度" type="range" min="0" max="0.72" step="0.01" value={centerShade} onChange={(event) => setCenterShade(Number(event.target.value))} /><div className="visual-control-scale"><span>背景更清晰</span><span>背景更暗</span></div></div>}
           {menuOpen && (
             <div className="mobile-menu liquid-glass" id="mobile-menu">
               <a href="#workflow" onClick={() => setMenuOpen(false)}>执行轨道</a>
@@ -729,6 +745,7 @@ export default function App() {
               <button type="button" onClick={() => { menuButtonRef.current?.focus(); setSkillsOpen(true); setMenuOpen(false); }}><UsersThree /> 用户 Skills</button>
               <button type="button" onClick={() => { menuButtonRef.current?.focus(); setConfigOpen(true); setMenuOpen(false); }}><Key /> 模型连接</button>
               <button type="button" onClick={() => { setStudioOpen(true); setMenuOpen(false); }}>放入纪要</button>
+              <button type="button" onClick={() => { setVisualOpen((open) => !open); setMenuOpen(false); }}><Eye /> 调整通透度</button>
             </div>
           )}
         </nav>
