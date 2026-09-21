@@ -34,6 +34,9 @@
 
 @media(min-width:761px){.navbar>.visual-control{top:82px;right:max(24px,calc((100vw - 1024px)/2 + 245px))}}
 
+.navbar>.visual-control{position:absolute}
+@media(max-width:760px){.navbar>.visual-control{position:fixed;top:82px;right:16px}}
+
 /* Agent workspace: one continuous execution rail, with state-specific tools below it. */
 /* Clip visual overflow without creating a scroll container that breaks the sticky nav. */
 .app{overflow:clip}
