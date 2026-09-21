@@ -205,7 +205,7 @@ Node.js + Express + TypeScript
 | `server/runtime-config.ts` | 运行时模型配置 | 被 Git 忽略的本机配置文件持久化 Key，支持环境变量回退 |
 | `server/analyze.test.ts` | 抽取辅助、API 失败关闭和配置持久化测试 | 20 个测试 |
 | `server/agent.test.ts` | Agent 集成测试 | 27 个测试 |
-| `启动演示.bat` | Windows 双击启动 | 已修复中文编码闪退，固定 5174 |
+| `启动演示.bat` | Windows 双击启动 | 固定 5174，分别自检网页与 8788 API，缺失服务会在隐藏后台补启；启动成功后不保留控制台窗口 |
 
 ## 8. 当前 API
 

@@ -421,24 +421,48 @@ export default function App() {
         headers: method === "POST" ? { "Content-Type": "application/json" } : undefined,
         body: method === "POST" ? JSON.stringify(configForm) : undefined,
       });
-      const data = await response.json() as ModelConfigStatus & { error?: string; message?: string };
-      if (!response.ok) throw new Error(data.error || "请求没有完成。");
+      // The Vite proxy can return an empty or non-JSON body when the API process is down.
+      // Parse defensively so that the user sees the actual connection problem instead of
+      // the browser's opaque "Unexpected end of JSON input" error.
+      const responseText = await response.text();
+      let data: Partial<ModelConfigStatus> & { error?: string; message?: string } = {};
+      if (!responseText.trim()) {
+        throw new Error(response.ok
+          ? "模型服务没有返回配置结果，请重试。"
+          : `请求没有完成（HTTP ${response.status}）。请确认 API 服务正在运行。`);
+      } else {
+        try {
+          data = JSON.parse(responseText) as Partial<ModelConfigStatus> & { error?: string; message?: string };
+        } catch {
+          if (!response.ok) {
+            throw new Error(`模型服务没有返回有效响应（HTTP ${response.status}）。请确认 API 服务正在运行。`);
+          }
+          throw new Error("服务器返回了无法解析的数据，请重试。");
+        }
+      }
+      if (!response.ok) {
+        throw new Error(data.error || `请求没有完成（HTTP ${response.status}）。请确认 API 服务正在运行。`);
+      }
       if (mode === "test") {
         setConfigMessage(data.message || "连接成功。");
       } else {
-        setConfigStatus(data);
+        if (typeof data.configured !== "boolean" || typeof data.provider !== "string") {
+          throw new Error("服务器返回的配置状态不完整，请重试。");
+        }
+        const nextConfig = data as ModelConfigStatus;
+        setConfigStatus(nextConfig);
         setConfigForm((current) => ({
           ...current,
           apiKey: "",
-          baseURL: data.baseURL || "https://api.deepseek.com",
-          model: data.model || "deepseek-chat",
+          baseURL: nextConfig.baseURL || "https://api.deepseek.com",
+          model: nextConfig.model || "deepseek-chat",
         }));
         if (mode === "save") {
           setConfigMessage("连接配置已保存到本机，服务重启后仍然有效。");
-          notify(`${data.provider} 已连接`);
+          notify(`${nextConfig.provider} 已连接`);
         } else {
-          setConfigMessage(data.configured ? "本机配置已移除，当前使用环境变量配置。" : "模型配置已移除，启动 Agent 前需要重新连接。");
-          notify(data.configured ? "已恢复环境配置" : "模型连接已移除");
+          setConfigMessage(nextConfig.configured ? "本机配置已移除，当前使用环境变量配置。" : "模型配置已移除，启动 Agent 前需要重新连接。");
+          notify(nextConfig.configured ? "已恢复环境配置" : "模型连接已移除");
         }
       }
     } catch (error) {
