@@ -49,37 +49,23 @@ import type {
 
 const VIDEO_SOURCE = "https://stream.mux.com/kimF2ha9zLrX64H00UgLGPflCzNtl1T0215MlAmeOztv8.m3u8";
 const RUN_STORAGE_KEY = "meeting-action-agent.run-id";
-const COMPLETE_NOTES = `会议主题：校园创新项目发布准备
+const COMPREHENSIVE_NOTES = `会议主题：秋季版本故障复盘与发布协调会
 会议日期：2026年9月20日
-参会人：李四（产品）、王五（测试）、张三（研发）、赵六（运营）
+参会人：李四（产品）、张三（研发）、王五（测试）、赵六（运营）
 
-讨论摘要：新版本计划 9 月 30 日发布。李四说明先面向校内用户灰度，再根据反馈全量发布；大家同意沿用上次的发布检查清单。
-决议：9 月 30 日发布，灰度范围先覆盖校内用户。
+讨论摘要：新版本暂定 9 月 30 日先面向校内用户灰度。昨天的 S1 故障已经临时缓解，但根因尚未确认；一般故障复盘原本按低优先级处理，本次是否需要提升优先级要由人工确认。
 
 行动项：
-1. 王五负责在下周三前完成移动端登录流程回归测试并提交问题清单。依赖：张三提供测试环境。风险：测试环境偶发不稳定，可能影响回归进度。
-2. 赵六负责在 9 月 26 日前完成发布公告和用户指引初稿，供李四审核。
-3. 张三负责在本周五前确认服务器扩容报价并提交采购建议，依赖供应商最终回复。
+1. 请老张在下周三前修复 S1 故障并提交复盘，复盘需写明根因、触发条件和防止复发的检查项。风险：根因未确认可能影响灰度发布。
+2. 王五负责在 9 月 25 日前完成移动端登录流程回归测试并提交问题清单。依赖：张三先提供稳定的测试环境；风险：环境偶发不可用可能拖慢测试。
+3. 发布公告需要补充新的登录入口并尽快完成，但会上没有确定最终负责人和交付日期。赵六可以先整理素材，李四负责审核终稿。
+4. 扩容报价需要在 9 月 27 日前确认，李四和赵六都参与过讨论，但会议没有说清由谁最终负责提交采购建议。
 
-待确认：若回归测试未通过，是否延后灰度发布时间？`;
-const CLARIFYING_NOTES = `会议主题：秋季版本公告协调会
-会议日期：2026年9月20日
-参会人：李四（产品）、赵六（运营）、王五（测试）
-
-李四：上线安排先不变，公告需要反映新的登录入口。赵六表示可以先整理现有素材，但会上没有指定谁来最终完成发布公告，也没有确定交付日期。
-会议决定完善发布公告，并尽快完成。
-王五：测试结果仍在整理，本次没有形成其他任务。`;
-const ALIAS_PRIORITY_NOTES = `会议主题：线上故障复盘与发布排期
-会议日期：2026年9月20日
-参会人：李四（产品）、张三（研发）、王五（测试）
-
-李四：昨天的 S1 故障已临时缓解，但还没有查清根因。请老张下周三前修复 S1 故障并提交复盘，复盘中说明触发条件和防止复发的检查项。
-王五：测试环境仍需观察，修复完成后再做一次登录回归。
-决议：先完成故障修复和复盘，再讨论发布节奏。
-风险：如果根因未确认，灰度发布可能受阻。`;
+其他讨论：大家交流了下一学期是否调整会员价格，但没有形成决议，也没有安排后续行动。
+决议：先完成故障修复和登录回归，通过人工审核后再决定是否按原计划灰度。`;
 
 type DemoCase = {
-  id: "complete" | "clarifying" | "alias-priority";
+  id: "comprehensive";
   label: string;
   caption: string;
   notes: string;
@@ -91,27 +77,13 @@ type DemoCase = {
 
 const DEMO_CASES: DemoCase[] = [
   {
-    id: "complete",
-    label: "完整任务",
-    caption: "字段、日期、风险与依赖",
-    notes: COMPLETE_NOTES,
-    meetingDate: "2026-09-20",
-  },
-  {
-    id: "clarifying",
-    label: "模糊澄清",
-    caption: "缺负责人、日期和任务确认",
-    notes: CLARIFYING_NOTES,
-    meetingDate: "2026-09-20",
-  },
-  {
-    id: "alias-priority",
-    label: "别名 + 优先级冲突",
-    caption: "需要团队别名和优先级规则",
-    notes: ALIAS_PRIORITY_NOTES,
+    id: "comprehensive",
+    label: "综合测试纪要",
+    caption: "一次验证完整抽取、模糊澄清、成员别名、优先级冲突、依赖风险与非任务讨论",
+    notes: COMPREHENSIVE_NOTES,
     meetingDate: "2026-09-20",
     instruction: "请结合已启用的用户 Markdown Skill 理解成员别名和优先级规则；规则冲突时等待人工选择。",
-    hint: "先在用户 Skills 中载入“老张”=张三，并将 S1 设为高、故障设为低的 Markdown。",
+    hint: "先载入测试 Skill，让模型知道“老张”=张三，并识别 S1 与一般故障复盘之间的优先级冲突。",
     needsUserSkill: true,
   },
 ];
@@ -737,7 +709,7 @@ export default function App() {
             {!studioOpen ? (
               <div className="hero-actions reveal reveal-actions">
                 <button className="access-button" type="button" onClick={() => setStudioOpen(true)}>放入会议纪要</button>
-                <p className="demo-caption">三组输入分别覆盖完整抽取、模糊澄清，以及成员别名和优先级冲突。</p>
+                <p className="demo-caption">一份接近真实会议的综合纪要，同时验证完整抽取、主动澄清、成员别名、优先级审核、依赖风险和非任务识别。</p>
                 <div className="demo-presets" aria-label="演示输入">
                   {DEMO_CASES.map((demo) => (
                     <button
