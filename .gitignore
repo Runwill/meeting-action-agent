@@ -7,6 +7,8 @@ dist
 .DS_Store
 data/agent-store.json
 data/agent-store.json.tmp
+data/feishu-identities.json
+data/feishu-identities.json.tmp
 data/model-config.env
 data/model-config.env.*.tmp
 data/user-skills/
@@ -16,6 +18,10 @@ data/user-skills/
 coverage/
 playwright-report/
 test-results/
+pnpm-workspace.yaml
 screenshots/
+演示图片/
 视觉参考-Asme/
 design-qa.md
+alpha-sprint-private/
+alpha冲刺说明_2026.docx

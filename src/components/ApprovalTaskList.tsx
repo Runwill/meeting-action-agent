@@ -7,9 +7,14 @@ type ApprovalTaskListProps = {
   tasks: ActionTask[];
   selectedTaskIds: string[];
   busy: boolean;
+  connectorName: string;
+  taskBlockReasons?: Record<string, string>;
+  approvalBlockMessage?: string;
   onTasksChange: (tasks: ActionTask[]) => void;
   onSelectionChange: (ids: string[]) => void;
   onApprove: () => void;
+  onResolveApprovalBlock?: () => void;
+  onKeepCreatableOnly?: () => void;
 };
 
 type TaskEditorProps = {
@@ -17,12 +22,13 @@ type TaskEditorProps = {
   index: number;
   selected: boolean;
   expanded: boolean;
+  blockReason?: string;
   onSelect: (selected: boolean) => void;
   onChange: (patch: Partial<ActionTask>) => void;
   onExpand: () => void;
 };
 
-export function TaskEditor({ task, index, selected, expanded, onSelect, onChange, onExpand }: TaskEditorProps) {
+export function TaskEditor({ task, index, selected, expanded, blockReason, onSelect, onChange, onExpand }: TaskEditorProps) {
   const editorId = useId();
   const titleId = `${editorId}-title`;
   const titleHintId = `${editorId}-title-hint`;
@@ -37,7 +43,7 @@ export function TaskEditor({ task, index, selected, expanded, onSelect, onChange
   const dueDateMissing = selected && !task.due_date;
 
   return (
-    <article className={`approval-task liquid-glass priority-${task.priority} ${selected ? "is-selected" : ""}`}>
+    <article className={`approval-task liquid-glass priority-${task.priority} ${selected ? "is-selected" : ""} ${blockReason ? "is-blocked" : ""}`}>
       <div className="approval-task-main">
         <label className="selection-control" title={selected ? "取消创建此任务" : "选择创建此任务"}>
           <input type="checkbox" checked={selected} onChange={(event) => onSelect(event.target.checked)} />
@@ -69,6 +75,7 @@ export function TaskEditor({ task, index, selected, expanded, onSelect, onChange
             <p>{task.priority_reason || "当前没有单独的优先级说明，可在批准前调整。"}</p>
             {task.priority_evidence && <blockquote>{task.priority_evidence}</blockquote>}
           </div>
+          {blockReason && <p className="approval-block-note" role="alert">{blockReason}</p>}
         </div>
         <button className="expand-button" type="button" onClick={onExpand} aria-expanded={expanded} aria-controls={detailId} aria-label={`${expanded ? "收起" : "展开"}任务 ${index + 1} 详情`} title={expanded ? "收起详情" : "展开详情"}><CaretDown /></button>
       </div>
@@ -84,11 +91,25 @@ export function TaskEditor({ task, index, selected, expanded, onSelect, onChange
   );
 }
 
-export function ApprovalTaskList({ tasks, selectedTaskIds, busy, onTasksChange, onSelectionChange, onApprove }: ApprovalTaskListProps) {
+export function ApprovalTaskList({
+  tasks,
+  selectedTaskIds,
+  busy,
+  connectorName,
+  taskBlockReasons = {},
+  approvalBlockMessage,
+  onTasksChange,
+  onSelectionChange,
+  onApprove,
+  onResolveApprovalBlock,
+  onKeepCreatableOnly,
+}: ApprovalTaskListProps) {
   const [expandedId, setExpandedId] = useState<string | null>(tasks[0]?.id ?? null);
   const selected = new Set(selectedTaskIds);
   const allSelected = tasks.length > 0 && selectedTaskIds.length === tasks.length;
   const incompleteSelected = tasks.filter((task) => selected.has(task.id) && (!task.title.trim() || !task.owner?.trim() || !task.due_date));
+  const blockedSelected = tasks.filter((task) => selected.has(task.id) && taskBlockReasons[task.id]);
+  const approvalBlocked = blockedSelected.length > 0;
 
   const updateTask = (id: string, patch: Partial<ActionTask>) => {
     onTasksChange(tasks.map((task) => task.id === id ? { ...task, ...patch } : task));
@@ -105,7 +126,7 @@ export function ApprovalTaskList({ tasks, selectedTaskIds, busy, onTasksChange, 
           <span>全选 {tasks.length} 项</span>
         </label>
       </header>
-      <p className="panel-intro">检查负责人、日期和优先级。只有点击底部批准按钮后，任务才会写入本地任务中心。</p>
+      <p className="panel-intro">检查负责人、日期和优先级。只有点击底部批准按钮后，任务才会写入{connectorName}。</p>
       <div className="approval-task-list">
         {tasks.map((task, index) => (
           <TaskEditor
@@ -114,6 +135,7 @@ export function ApprovalTaskList({ tasks, selectedTaskIds, busy, onTasksChange, 
             index={index}
             selected={selected.has(task.id)}
             expanded={expandedId === task.id}
+            blockReason={taskBlockReasons[task.id]}
             onSelect={(checked) => onSelectionChange(checked ? [...selectedTaskIds, task.id] : selectedTaskIds.filter((id) => id !== task.id))}
             onChange={(patch) => updateTask(task.id, patch)}
             onExpand={() => setExpandedId(expandedId === task.id ? null : task.id)}
@@ -121,8 +143,20 @@ export function ApprovalTaskList({ tasks, selectedTaskIds, busy, onTasksChange, 
         ))}
       </div>
       <footer className="agent-panel-actions approval-actions">
-        <p id="approval-safety-note">{incompleteSelected.length ? `仍有 ${incompleteSelected.length} 个已选任务缺少标题、负责人或截止日期。` : `已选择 ${selectedTaskIds.length} 项。未选任务不会创建。`}</p>
-        <button className="primary-action" type="button" disabled={busy || selectedTaskIds.length === 0 || incompleteSelected.length > 0} onClick={onApprove} aria-describedby="approval-safety-note">
+        <p id="approval-safety-note">
+          {incompleteSelected.length
+            ? `仍有 ${incompleteSelected.length} 个已选任务缺少标题、负责人或截止日期。`
+            : approvalBlocked
+              ? approvalBlockMessage || `${blockedSelected.length} 个已选任务暂时不能写入${connectorName}。`
+              : `已选择 ${selectedTaskIds.length} 项。未选任务不会创建。`}
+        </p>
+        {approvalBlocked && (
+          <div className="approval-block-actions">
+            {onResolveApprovalBlock && <button type="button" onClick={onResolveApprovalBlock}>打开平台连接</button>}
+            {onKeepCreatableOnly && <button type="button" onClick={onKeepCreatableOnly}>只保留可创建任务</button>}
+          </div>
+        )}
+        <button className="primary-action" type="button" disabled={busy || selectedTaskIds.length === 0 || incompleteSelected.length > 0 || approvalBlocked} onClick={onApprove} aria-describedby="approval-safety-note">
           {busy ? "正在创建并回读…" : `批准并创建 ${selectedTaskIds.length} 项`}
           <ArrowRight aria-hidden="true" />
         </button>

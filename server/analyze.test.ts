@@ -58,6 +58,11 @@ describe("deterministic analyzer test helper", () => {
     expect(result.tasks[0].due_date).toBe("2026-09-23");
   });
 
+  it("resolves a bare weekday after a Sunday meeting as the upcoming weekday", () => {
+    const result = analyzeLocally({ meetingDate: "2026-09-20", notes: "研发这边在周三前完成移动端回归。" });
+    expect(result.tasks[0].due_date).toBe("2026-09-23");
+  });
+
   it("uses the meeting date found in notes as the relative-date base", () => {
     const result = analyzeLocally({
       notes: "会议日期：2026年9月14日\n王五负责明天完成回归测试并提交问题清单。",
@@ -263,6 +268,99 @@ describe("deterministic analyzer test helper", () => {
       priority_evidence: null,
       priority_conflict: true,
     });
+  });
+
+  it("fills a missing model date from an explicit relative date in the source", async () => {
+    setRuntimeModelConfig({ baseURL: "https://example.invalid/v1", apiKey: "secret-test-key", model: "test-model" });
+    const result = await analyzeMeeting(
+      { notes: "研发这边在周三前完成移动端回归。", meetingDate: "2026-09-20" },
+      { invokeModel: async () => JSON.stringify({
+        meeting_title: "发布准备",
+        meeting_date: "2026-09-20",
+        summary: "准备回归",
+        attendees: ["张三"],
+        decisions: [],
+        tasks: [{
+          title: "完成移动端回归",
+          description: "研发这边在周三前完成移动端回归。",
+          owner: null,
+          due_date: null,
+          priority: "medium",
+          priority_reason: "默认中优先级",
+          priority_evidence: null,
+          priority_conflict: false,
+          status: "todo",
+          evidence: "研发这边在周三前完成移动端回归。",
+          dependencies: [],
+          risk: null,
+          confidence: 0.6,
+        }],
+        follow_ups: [],
+      }) },
+    );
+    expect(result.tasks[0].due_date).toBe("2026-09-23");
+  });
+
+  it("clears a model-filled date when the source says the due date is still undecided", async () => {
+    setRuntimeModelConfig({ baseURL: "https://example.invalid/v1", apiKey: "secret-test-key", model: "test-model" });
+    const result = await analyzeMeeting(
+      { notes: "李四：公告别拖太久。赵六：最后谁写、哪天交今天好像还没定。", meetingDate: "2026-09-20" },
+      { invokeModel: async () => JSON.stringify({
+        meeting_title: "发布准备",
+        meeting_date: "2026-09-20",
+        summary: "准备公告",
+        attendees: ["李四", "赵六"],
+        decisions: [],
+        tasks: [{
+          title: "完成公告终稿",
+          description: "完成公告终稿",
+          owner: null,
+          due_date: "2026-09-20",
+          priority: "medium",
+          priority_reason: "模型误将会议当天作为截止日期。",
+          priority_evidence: null,
+          priority_conflict: false,
+          status: "todo",
+          evidence: "李四：公告别拖太久。赵六：最后谁写、哪天交今天好像还没定。",
+          dependencies: [],
+          risk: null,
+          confidence: 0.6,
+        }],
+        follow_ups: [],
+      }) },
+    );
+    expect(result.tasks[0].due_date).toBeNull();
+  });
+
+  it("keeps an explicit bare-day due date when only the owner is still undecided", async () => {
+    setRuntimeModelConfig({ baseURL: "https://example.invalid/v1", apiKey: "secret-test-key", model: "test-model" });
+    const result = await analyzeMeeting(
+      { notes: "扩容报价也要跟一下，27号前得把采购建议交出来，不过到底谁牵头，等会后再定。", meetingDate: "2026-09-20" },
+      { invokeModel: async () => JSON.stringify({
+        meeting_title: "发布准备",
+        meeting_date: "2026-09-20",
+        summary: "准备采购建议",
+        attendees: [],
+        decisions: [],
+        tasks: [{
+          title: "提交扩容采购建议",
+          description: "提交扩容采购建议",
+          owner: null,
+          due_date: "2026-09-27",
+          priority: "medium",
+          priority_reason: "有明确日期但负责人未定。",
+          priority_evidence: null,
+          priority_conflict: false,
+          status: "todo",
+          evidence: "扩容报价也要跟一下，27号前得把采购建议交出来，不过到底谁牵头，等会后再定。",
+          dependencies: [],
+          risk: null,
+          confidence: 0.7,
+        }],
+        follow_ups: [],
+      }) },
+    );
+    expect(result.tasks[0].due_date).toBe("2026-09-27");
   });
 
   it("rejects model output that omits the structured priority conflict flag", async () => {

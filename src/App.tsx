@@ -26,9 +26,15 @@ import {
   ApiError,
   confirmAgentAction,
   createAgentRun,
+  getConnectors,
+  getFeishuIntegrationStatus,
   getAgentRun,
+  markFeishuRedirectVerified,
+  saveFeishuSettings,
+  searchFeishuTasklists,
   sendAgentCommand,
   sendAgentMessage,
+  startFeishuOAuth,
 } from "./api";
 import { AgentRail } from "./components/AgentRail";
 import { AgentConversation } from "./components/AgentConversation";
@@ -43,6 +49,9 @@ import { useDialogFocus } from "./hooks/useDialogFocus";
 import type {
   ActionTask,
   AgentRun,
+  ConnectorsStatus,
+  FeishuIntegrationStatus,
+  FeishuTasklistOption,
   ModelConfigStatus,
   Priority,
   TaskStatus,
@@ -50,22 +59,7 @@ import type {
 
 const VIDEO_SOURCE = "https://stream.mux.com/kimF2ha9zLrX64H00UgLGPflCzNtl1T0215MlAmeOztv8.m3u8";
 const RUN_STORAGE_KEY = "meeting-action-agent.run-id";
-const COMPREHENSIVE_NOTES = `会议主题：秋季版本故障复盘与发布协调会
-会议日期：2026年9月20日
-参会人：李四（产品）、张三（研发）、王五（测试）、赵六（运营）
-
-讨论摘要：新版本暂定 9 月 30 日先面向校内用户灰度。昨天的 S1 故障已经临时缓解，但根因尚未确认；一般故障复盘原本按低优先级处理，本次是否需要提升优先级要由人工确认。
-
-行动项：
-1. 请老张在下周三前修复 S1 故障并提交复盘，复盘需写明根因、触发条件和防止复发的检查项。风险：根因未确认可能影响灰度发布。
-2. 王五负责在 9 月 25 日前完成移动端登录流程回归测试并提交问题清单。依赖：张三先提供稳定的测试环境；风险：环境偶发不可用可能拖慢测试。
-3. 发布公告需要补充新的登录入口并尽快完成，但会上没有确定最终负责人和交付日期。赵六可以先整理素材，李四负责审核终稿。
-4. 扩容报价需要在 9 月 27 日前确认，李四和赵六都参与过讨论，但会议没有说清由谁最终负责提交采购建议。
-
-其他讨论：大家交流了下一学期是否调整会员价格，但没有形成决议，也没有安排后续行动。
-决议：先完成故障修复和登录回归，通过人工审核后再决定是否按原计划灰度。`;
-
-const CONVERSATION_NOTES = `秋季版本协调会，9月20日下午
+const FULL_FLOW_TEST_NOTES = `秋季版本协调会，9月20日下午
 到场：李四、张三、王五、赵六
 
 李四：咱们还是争取 30 号先给校内用户灰度，不过昨天那个问题得先处理。老张，S1 虽然临时压住了，根因还没找到，你下周三前把故障修掉，复盘也一起交一下，触发条件和以后怎么避免都写清楚。
@@ -82,13 +76,19 @@ const CONVERSATION_NOTES = `秋季版本协调会，9月20日下午
 李四：扩容报价也要跟一下，27 号前得把采购建议交出来。我和赵六之前都看过报价，不过到底谁牵头，等会后再定。
 赵六：行，我把供应商回复先转群里。
 
+李四：第三阶段飞书这块也要留下验证材料，不能只说接口通了。
+张三：这条我负责，请把它作为一条真实飞书任务创建，标题先用“【测试】飞书深化复测记录”，10 月 2 日前交。任务说明里要写清楚五项复测：状态写回、字段写回、清单归类、到期提醒和评论记录，并且最后区分“已实机验证”和“模拟接口已验证”。
+王五：创建后不要再拆新任务。我们只围绕这条测试任务做复测：先在本系统把状态改成已完成，看飞书里是否同步完成；再把标题改成“【测试】飞书深化复测记录-已改名”，把截止日期改到 10 月 3 日，看飞书任务详情是否变化。
+赵六：清单归类、到期提醒和评论记录也看这条任务详情。它们不是会议纪要临时决定的字段，而是平台连接里提前配置好的能力；如果真实飞书里看不到，就在复测记录里写成“模拟接口已验证，实机配置或权限待补”。
+李四：审批时只把这条复测记录写入飞书。前面的故障、回归、公告和采购建议先作为会议行动项保留在系统计划里，不要在这轮一起创建到飞书，方便我们测试“只批准一部分任务”的流程。
+
 王五：下学期会员价格要不要调？
 李四：今天先讨论到这儿，这件事没结论，也先不安排人跟进。
 
 最后口头结论：故障修复和登录回归完成并经过人工确认后，再决定是否按原计划灰度。`;
 
 type DemoCase = {
-  id: "comprehensive" | "conversation";
+  id: "full_flow";
   label: string;
   caption: string;
   notes: string;
@@ -100,23 +100,13 @@ type DemoCase = {
 
 const DEMO_CASES: DemoCase[] = [
   {
-    id: "comprehensive",
-    label: "综合测试纪要",
-    caption: "一次验证完整抽取、模糊澄清、成员别名、优先级冲突、依赖风险与非任务讨论",
-    notes: COMPREHENSIVE_NOTES,
+    id: "full_flow",
+    label: "完整流程测试纪要",
+    caption: "一次测试部分批准、单条飞书写入、状态/字段写回复测、澄清、别名、优先级冲突、依赖风险与非任务讨论",
+    notes: FULL_FLOW_TEST_NOTES,
     meetingDate: "2026-09-20",
-    instruction: "请结合已启用的用户 Markdown Skill 理解成员别名和优先级规则；规则冲突时等待人工选择。",
-    hint: "先载入测试 Skill，让模型知道“老张”=张三，并识别 S1 与一般故障复盘之间的优先级冲突。",
-    needsUserSkill: true,
-  },
-  {
-    id: "conversation",
-    label: "真实对话式记录",
-    caption: "同样的测试点，改为多人逐句发言、追问和口语化插话",
-    notes: CONVERSATION_NOTES,
-    meetingDate: "2026-09-20",
-    instruction: "请结合已启用的用户 Markdown Skill 理解成员别名和优先级规则；从口语对话中还原任务，不要把没有结论的讨论当成行动项。",
-    hint: "覆盖点与综合测试纪要相同，但文本更接近真实会议速记。需要先载入同一份测试 Skill。",
+    instruction: "请结合已启用的用户 Markdown Skill 理解成员别名和优先级规则；从口语对话中还原任务，不要把没有结论的讨论当成行动项；飞书深化复测只应生成一条任务，状态写回、字段写回、清单、提醒和评论属于创建后的验证步骤，不要拆成多条任务。进入审批后，本轮真实飞书写入只勾选“【测试】飞书深化复测记录”这一条；其他行动项用于验证识别、澄清和部分批准，不要一起创建到飞书。",
+    hint: "先载入测试 Skill，让模型知道“老张”=张三；审批时只勾选飞书复测任务，其他行动项留作本系统计划样本，用来测试部分批准和非飞书任务留存。",
     needsUserSkill: true,
   },
 ];
@@ -129,8 +119,66 @@ const emptyConfig: ModelConfigStatus = {
   source: null,
   apiKeyPreview: null,
 };
+const emptyFeishuStatus: FeishuIntegrationStatus = {
+  configured: false,
+  enabled: false,
+  oauthEnabled: false,
+  redirectUri: null,
+  appConsoleUrl: null,
+  appPermissionUrl: null,
+  mappedOwnerNames: [],
+  advancedSettingsSource: "none",
+  tasklistGuid: null,
+  tasklistSectionGuid: null,
+  tasklistConfigured: false,
+  tasklistSectionConfigured: false,
+  dueReminderMinutes: [],
+  dueReminderCount: 0,
+  originUrlConfigured: false,
+  syncComments: false,
+  tasklistDiscoveryReady: false,
+  linkedUsers: [],
+};
+const emptyConnectorsStatus: ConnectorsStatus = {
+  connectors: [{
+    id: "local-task",
+    name: "Local Task Hub",
+    capabilities: { create: true, read: true, updateStatus: true, updateFields: true, statusValues: ["todo", "in_progress", "done"] },
+  }],
+  feishu: {
+    configured: false,
+    enabled: false,
+    baseURL: null,
+    userIdType: null,
+    ownerCount: 0,
+    advancedSettingsSource: "none",
+    tasklistGuid: null,
+    tasklistSectionGuid: null,
+    tasklistConfigured: false,
+    tasklistSectionConfigured: false,
+    dueReminderMinutes: [],
+    dueReminderCount: 0,
+    originUrlConfigured: false,
+    syncComments: false,
+  },
+};
 const priorityText: Record<Priority, string> = { high: "高", medium: "中", low: "低" };
 const statusText: Record<TaskStatus, string> = { todo: "待开始", in_progress: "进行中", done: "已完成" };
+const feishuReminderPresets = [
+  { label: "不提醒", value: "", helper: "只写入截止日期" },
+  { label: "提前 30 分钟", value: "30", helper: "适合当天短会跟进" },
+  { label: "提前 2 小时", value: "120", helper: "适合当天交付" },
+  { label: "提前 1 天", value: "1440", helper: "适合跨天任务" },
+  { label: "1 天 + 30 分钟", value: "1440, 30", helper: "适合重点复测" },
+];
+
+function normalizeReminderInput(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .join(", ");
+}
 
 type BusyState = "restore" | "create" | "clarify" | "approve" | "track" | "message" | "confirm" | null;
 
@@ -158,6 +206,10 @@ function scrollToElement(selector: string) {
   document.querySelector(selector)?.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start" });
 }
 
+function normalizeOwnerKey(value: string) {
+  return value.trim().toLocaleLowerCase();
+}
+
 export default function App() {
   const [notes, setNotes] = useState("");
   const [meetingDate, setMeetingDate] = useState("");
@@ -165,13 +217,32 @@ export default function App() {
   const [run, setRun] = useState<AgentRun | null>(null);
   const [busy, setBusy] = useState<BusyState>("restore");
   const [runError, setRunError] = useState("");
+  const [conversationError, setConversationError] = useState("");
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [approvalDraft, setApprovalDraft] = useState<ActionTask[]>([]);
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
   const [statusBusyId, setStatusBusyId] = useState<string | null>(null);
 
   const [configStatus, setConfigStatus] = useState<ModelConfigStatus>(emptyConfig);
+  const [connectorsStatus, setConnectorsStatus] = useState<ConnectorsStatus>(emptyConnectorsStatus);
   const [configOpen, setConfigOpen] = useState(false);
+  const [feishuStatus, setFeishuStatus] = useState<FeishuIntegrationStatus>(emptyFeishuStatus);
+  const [feishuOpen, setFeishuOpen] = useState(false);
+  const [feishuAlias, setFeishuAlias] = useState("");
+  const [feishuBusy, setFeishuBusy] = useState(false);
+  const [feishuError, setFeishuError] = useState("");
+  const [feishuCopyMessage, setFeishuCopyMessage] = useState("");
+  const [feishuSettingsBusy, setFeishuSettingsBusy] = useState(false);
+  const [feishuTasklistBusy, setFeishuTasklistBusy] = useState(false);
+  const [feishuTasklistQuery, setFeishuTasklistQuery] = useState("");
+  const [feishuTasklistOptions, setFeishuTasklistOptions] = useState<FeishuTasklistOption[]>([]);
+  const [feishuTasklistIssue, setFeishuTasklistIssue] = useState<"auth" | "">("");
+  const [feishuSettingsForm, setFeishuSettingsForm] = useState({
+    tasklistGuid: "",
+    tasklistSectionGuid: "",
+    dueReminderMinutes: "",
+    syncComments: false,
+  });
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [skillDemoPrompt, setSkillDemoPrompt] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -199,6 +270,7 @@ export default function App() {
   const resultsHeadingRef = useRef<HTMLHeadingElement>(null);
   const previousStateRef = useRef<AgentRun["state"] | null>(null);
   const configPanelRef = useRef<HTMLElement>(null);
+  const feishuPanelRef = useRef<HTMLElement>(null);
   const toastTimer = useRef<number | undefined>(undefined);
   const runGenerationRef = useRef(0);
 
@@ -208,9 +280,11 @@ export default function App() {
   }, [centerShade]);
 
   const closeConfig = useCallback(() => setConfigOpen(false), []);
+  const closeFeishu = useCallback(() => setFeishuOpen(false), []);
   const closeSkills = useCallback(() => { setSkillsOpen(false); setSkillDemoPrompt(false); }, []);
   const closeInspector = useCallback(() => setInspectorOpen(false), []);
   useDialogFocus(configOpen, configPanelRef, closeConfig);
+  useDialogFocus(feishuOpen, feishuPanelRef, closeFeishu);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -222,6 +296,7 @@ export default function App() {
     if (expectedGeneration !== undefined && expectedGeneration !== runGenerationRef.current) return false;
     setRun(next);
     setRunError("");
+    setConversationError("");
     localStorage.setItem(RUN_STORAGE_KEY, next.id);
     if (next.state === "awaiting_approval" || next.state === "failed") {
       setApprovalDraft(next.analysis.tasks.map((task) => ({ ...task })));
@@ -258,6 +333,43 @@ export default function App() {
         setConfigStatus(emptyConfig);
       });
   }, []);
+
+  const refreshConnectorsStatus = useCallback(async () => {
+    try {
+      setConnectorsStatus(await getConnectors());
+    } catch {
+      setConnectorsStatus(emptyConnectorsStatus);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshConnectorsStatus();
+  }, [refreshConnectorsStatus]);
+
+  const refreshFeishuStatus = useCallback(async () => {
+    try {
+      const nextStatus = await getFeishuIntegrationStatus();
+      setFeishuStatus(nextStatus);
+      setFeishuSettingsForm({
+        tasklistGuid: nextStatus.tasklistGuid || "",
+        tasklistSectionGuid: nextStatus.tasklistSectionGuid || "",
+        dueReminderMinutes: nextStatus.dueReminderMinutes.join(", "),
+        syncComments: nextStatus.syncComments,
+      });
+      setFeishuError("");
+      setFeishuCopyMessage("");
+    } catch (error) {
+      setFeishuStatus(emptyFeishuStatus);
+      setFeishuError(errorMessage(error, "暂时无法读取飞书身份绑定状态。"));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (feishuOpen) {
+      void refreshFeishuStatus();
+      void refreshConnectorsStatus();
+    }
+  }, [feishuOpen, refreshConnectorsStatus, refreshFeishuStatus]);
 
   useEffect(() => {
     const runId = localStorage.getItem(RUN_STORAGE_KEY);
@@ -386,8 +498,8 @@ export default function App() {
     return () => window.removeEventListener("hashchange", syncModelRoute);
   }, []);
   useEffect(() => {
-    if (pageRef.current) pageRef.current.inert = configOpen || skillsOpen || inspectorOpen;
-  }, [configOpen, skillsOpen, inspectorOpen]);
+    if (pageRef.current) pageRef.current.inert = configOpen || feishuOpen || skillsOpen || inspectorOpen;
+  }, [configOpen, feishuOpen, skillsOpen, inspectorOpen]);
 
   const analysis = run?.analysis ?? null;
   const exportTasks = useMemo(() => {
@@ -415,6 +527,165 @@ export default function App() {
   const activeState = busy === "create" ? "analyzing" : run?.state ?? "idle";
   const isExecutionActive = busy === "approve" || run?.state === "executing" || run?.state === "verifying";
   const runRequiresResolution = !!run && ["executing", "verifying", "failed"].includes(run.state);
+  const activeConnector = connectorsStatus.connectors.find((connector) => connector.id === run?.connector_id);
+  const connectorName = run?.created_tasks[0]?.connector_name || activeConnector?.name || (run?.connector_id === "feishu" ? "飞书任务" : "Local Task Hub");
+  const statusOptions = activeConnector?.capabilities.statusValues?.length
+    ? activeConnector.capabilities.statusValues
+    : run?.connector_id === "feishu"
+      ? (["in_progress", "done"] as TaskStatus[])
+      : (["todo", "in_progress", "done"] as TaskStatus[]);
+  const supportsStatusUpdate = !!activeConnector?.capabilities.updateStatus;
+  const feishuCanBind = feishuStatus.configured && feishuStatus.oauthEnabled;
+  const feishuSetupHint = feishuCanBind
+    ? "管理员已完成飞书应用配置，成员只需在这里绑定自己的飞书身份。"
+    : feishuStatus.configured
+      ? "飞书应用凭据已配置，但身份授权回调还没就绪，请部署人员补充回调地址。"
+    : "当前演示环境还没有完成飞书应用配置，请先由部署人员配置 App ID 和 App Secret。";
+  const feishuStatusTitle = feishuCanBind
+    ? "飞书任务身份绑定可用"
+    : feishuStatus.configured
+      ? "飞书任务已接入，成员绑定待部署核验"
+      : "尚未配置飞书任务";
+  const feishuStatusDetail = feishuCanBind
+    ? `${feishuStatus.linkedUsers.length} 个成员身份已绑定`
+    : feishuStatus.configured
+      ? "创建和回读可用；OAuth 回调核验后再开放成员绑定"
+      : "需要部署人员配置 App ID、App Secret 和回调地址";
+  const hasFeishuCommentPermissionIssue = !!run?.created_tasks.some((task) =>
+    task.connector_id === "feishu" && task.issues.some((issue) => /飞书评论同步失败|task:comment:write|task:comment:read/i.test(issue)),
+  );
+  const feishuFeatureBadges = [
+    { label: "创建 / 回读", value: feishuStatus.configured ? "已接入" : "待配置", active: feishuStatus.configured },
+    { label: "状态 / 字段写回", value: feishuStatus.configured ? "已接入" : "待配置", active: feishuStatus.configured },
+    { label: "来源标记", value: feishuStatus.configured ? (feishuStatus.originUrlConfigured ? "带系统链接" : "已标记") : "待配置", active: feishuStatus.configured },
+    { label: "飞书清单", value: feishuStatus.tasklistConfigured ? (feishuStatus.tasklistSectionConfigured ? "指定分组" : "指定清单") : "未指定", active: feishuStatus.tasklistConfigured },
+    { label: "新建任务提醒", value: feishuStatus.dueReminderCount ? `${feishuStatus.dueReminderCount} 个规则` : "未启用", active: feishuStatus.dueReminderCount > 0 },
+    { label: "任务评论", value: hasFeishuCommentPermissionIssue ? "权限待配置" : feishuStatus.syncComments ? "开关已启用" : "未启用", active: feishuStatus.syncComments && !hasFeishuCommentPermissionIssue },
+  ];
+  const feishuSecurityUrl = feishuStatus.appConsoleUrl || "https://open.feishu.cn/app";
+  const feishuPermissionUrl = feishuStatus.appPermissionUrl || (feishuStatus.appConsoleUrl
+    ? feishuStatus.appConsoleUrl.replace(/\/safe(?=$|[?#])/, "/auth")
+    : "https://open.feishu.cn/app");
+  const feishuTasklistPermissionGuide = "飞书任务清单读取失败时，请在飞书开放平台进入当前应用的“权限管理”，搜索并开通任务/任务清单读取相关权限，保存并发布应用后，回到会议行动智能体重新绑定一次飞书成员，再重新读取清单。";
+  const feishuCommentPermissionGuide = "飞书评论同步失败时，请在飞书开放平台进入当前应用的“权限管理”，搜索并开通 task:comment:write；如果还要读取评论做核验，再开通 task:comment:read。保存并发布应用后，回到会议行动智能体重新检查连接，并用测试任务再次触发状态或字段写回。";
+  const feishuAdvancedItems: Array<{
+    label: string;
+    status: string;
+    active: boolean;
+    availability: string;
+    summary: string;
+    impact: string;
+    details: string[];
+    copyLabel: string;
+    copyText: string;
+  }> = [
+    {
+      label: "任务清单归类",
+      status: feishuStatus.tasklistConfigured ? (feishuStatus.tasklistSectionConfigured ? "已放入指定分组" : "已放入指定清单") : "未配置",
+      active: feishuStatus.tasklistConfigured,
+      availability: feishuStatus.tasklistConfigured ? "已保存默认清单" : "可在上方选择清单位置",
+      summary: feishuStatus.tasklistConfigured
+        ? "审批后创建的任务会进入已保存的飞书清单，便于把演示任务集中查看。"
+        : "如果你已经在飞书任务里建好清单，可以在上方粘贴清单链接；保存后，新创建的任务会自动归入该清单。",
+      impact: feishuStatus.tasklistConfigured
+        ? "可用完整流程测试纪要创建任务，再到飞书任务详情确认清单归类是否生效。"
+        : "未填写时不影响飞书任务创建、回读、状态写回和字段写回；清单归类这一项先记录为“未配置”。",
+      details: feishuStatus.tasklistConfigured
+        ? ["用完整流程测试纪要创建一条飞书任务。", "打开飞书任务详情，确认任务进入指定清单或分组。"]
+        : ["先在飞书任务里准备清单。", "复制清单或分组页面链接。", "粘贴到上方“飞书清单 / 清单分组”并保存。"],
+      copyLabel: "复制说明",
+      copyText: "请在会议行动智能体的“平台连接 → 飞书任务写入设置”中配置清单归类：先在飞书任务中准备一个用于演示或项目同步的清单，可选分组；再粘贴清单或分组链接。系统会尝试从链接中识别清单 / 分组值，识别失败时可用高级 ID 兜底。",
+    },
+    {
+      label: "新建任务提醒",
+      status: feishuStatus.dueReminderCount ? `已配置 ${feishuStatus.dueReminderCount} 条提醒规则` : "未启用",
+      active: feishuStatus.dueReminderCount > 0,
+      availability: feishuStatus.dueReminderCount ? "已保存写入提醒" : "可在上方选择创建任务时的提醒时间",
+      summary: feishuStatus.dueReminderCount
+        ? "会议任务带截止日期时，由本系统新创建到飞书的任务会自动带上这里配置的提醒。"
+        : "在上方选择提醒时间后，带截止日期的任务由本系统创建到飞书时会自动附带提醒。",
+      impact: feishuStatus.dueReminderCount
+        ? "可以用当前完整流程测试纪要创建带截止日期的任务，再到飞书任务详情里查看提醒。"
+        : "未填写时不影响任务截止日期写入；新建任务提醒这一项先记录为“未启用”。",
+      details: feishuStatus.dueReminderCount
+        ? ["创建带截止日期的飞书任务。", "打开飞书任务详情，检查提醒是否随任务一起生成。"]
+        : ["选择“提前 1 天”等常用提醒。", "需要多条提醒时使用自定义分钟兜底。", "保存后创建新的带截止日期任务验证。"],
+      copyLabel: "复制说明",
+      copyText: "请在会议行动智能体的“平台连接 → 飞书任务写入设置”中配置新建任务提醒：直接选择提前 30 分钟、提前 2 小时或提前 1 天；如需多条提醒，可在自定义分钟中填写，例如 1440, 30。配置后，本系统把会议纪要中带截止日期的任务创建到飞书时会自动附带这些提醒；这不是飞书客户端/账号里的任务默认提醒设置。",
+    },
+    {
+      label: "评论记录",
+      status: hasFeishuCommentPermissionIssue ? "权限待配置" : feishuStatus.syncComments ? "已启用" : "未启用",
+      active: feishuStatus.syncComments && !hasFeishuCommentPermissionIssue,
+      availability: hasFeishuCommentPermissionIssue ? "需要开通飞书评论权限" : feishuStatus.syncComments ? "同步开关已开启" : "可在上方开启操作记录",
+      summary: feishuStatus.syncComments
+        ? hasFeishuCommentPermissionIssue
+          ? "开关已经开启，但最近一次实机写入提示飞书应用缺少评论权限，所以评论记录没有真正写入。"
+          : "Agent 创建任务、同步状态或修改字段时，会尝试在飞书任务评论里留下操作记录。"
+        : "打开上方操作记录开关后，系统会尝试把创建、状态同步和字段修改写入飞书任务评论。",
+      impact: feishuStatus.syncComments
+        ? hasFeishuCommentPermissionIssue
+          ? "先在飞书开放平台补齐评论权限并发布应用，再回到本系统重新触发一次状态或字段写回。"
+          : "创建任务后，再从本系统修改状态或字段，飞书任务评论区应出现对应记录。"
+        : "如果飞书应用没有评论权限，主任务创建、状态写回和字段写回仍应成功；评论这一项记录权限结果。",
+      details: hasFeishuCommentPermissionIssue
+        ? ["打开飞书开放平台当前应用的权限管理。", "搜索并开通 task:comment:write；需要回读核验评论时再开通 task:comment:read。", "保存并发布应用后，回到本系统重新检查连接，再用测试任务复测评论同步。"]
+        : feishuStatus.syncComments
+        ? ["创建一条飞书任务。", "从本系统把状态改为已完成，或修改标题 / 截止日期。", "打开飞书任务评论区，检查是否出现 Agent 操作记录。"]
+        : ["在上方打开评论记录开关并保存。", "确认飞书应用具备任务评论权限。", "如果权限不足，系统会保留主任务写入结果。"],
+      copyLabel: "复制说明",
+      copyText: hasFeishuCommentPermissionIssue ? feishuCommentPermissionGuide : "请在会议行动智能体的“平台连接 → 飞书任务写入设置”中开启操作记录。飞书应用仍需要具备任务评论相关权限，并发布到当前测试企业；开启后，Agent 创建任务、同步状态和修改字段时，会在飞书任务评论区留下简短记录。评论权限不足时，不应阻断主任务创建、字段写回和回读验证。",
+    },
+  ];
+  const feishuAdvancedReadyCount = feishuAdvancedItems.filter((item) => item.active).length;
+  const feishuSettingsSourceLabel = feishuStatus.advancedSettingsSource === "persistent"
+    ? "页面保存"
+    : feishuStatus.advancedSettingsSource === "environment"
+      ? ".env / 环境变量"
+      : "未配置";
+  const feishuGuideStep = !feishuStatus.configured ? 1 : !feishuStatus.oauthEnabled ? 2 : feishuStatus.linkedUsers.length === 0 ? 3 : 4;
+  const feishuGuideTitle = feishuGuideStep === 1
+    ? "先完成飞书应用凭据配置"
+    : feishuGuideStep === 2
+      ? "现在需要登记并核验回调地址"
+      : feishuGuideStep === 3
+        ? "现在可以绑定成员身份"
+        : "可以回到会议审批并写入飞书";
+  const feishuGuideBody = feishuGuideStep === 1
+    ? "部署人员先在本机 .env 或系统环境变量里填入 FEISHU_APP_ID、FEISHU_APP_SECRET，并把任务平台切到 feishu。"
+    : feishuGuideStep === 2
+      ? "本系统可以复制回调地址并打开当前飞书应用的安全设置页；在飞书里粘贴保存后，回到这里点“我已在飞书保存”。"
+      : feishuGuideStep === 3
+        ? "成员在下方填写系统里的姓名或别名，例如张三、老张，然后点击绑定当前飞书用户；飞书确认后会返回本系统。"
+        : "成员身份已可用于负责人映射。回到首页放入会议纪要，完成 Agent 分析和人工审批后即可创建飞书任务。";
+  const guideStepClass = (step: number) => step < feishuGuideStep ? "done" : step === feishuGuideStep ? "current" : "locked";
+  const feishuKnownOwnerKeys = useMemo(() => new Set(
+    [
+      ...feishuStatus.mappedOwnerNames,
+      ...feishuStatus.linkedUsers.flatMap((user) => [user.name, ...user.aliases]),
+    ].map(normalizeOwnerKey).filter(Boolean),
+  ), [feishuStatus.linkedUsers, feishuStatus.mappedOwnerNames]);
+  const feishuApprovalBlockReasons = useMemo(() => {
+    if (run?.connector_id !== "feishu") return {};
+    return Object.fromEntries(approvalDraft.flatMap((task) => {
+      const owner = task.owner?.trim();
+      if (!owner || feishuKnownOwnerKeys.has(normalizeOwnerKey(owner))) return [];
+      return [[task.id, `飞书还没有负责人“${owner}”的身份映射。请先在平台连接中让该成员绑定，或取消勾选此任务。`]];
+    }));
+  }, [approvalDraft, feishuKnownOwnerKeys, run?.connector_id]);
+  const selectedFeishuMissingOwners = useMemo(() => {
+    const selected = new Set(selectedTaskIds);
+    return [...new Set(approvalDraft
+      .filter((task) => selected.has(task.id) && feishuApprovalBlockReasons[task.id])
+      .map((task) => task.owner?.trim())
+      .filter((owner): owner is string => !!owner))];
+  }, [approvalDraft, feishuApprovalBlockReasons, selectedTaskIds]);
+  const feishuApprovalBlockMessage = selectedFeishuMissingOwners.length
+    ? `飞书写入前需要先绑定负责人：${selectedFeishuMissingOwners.join("、")}。绑定完成后回到审批页重新检查，再批准创建。`
+    : undefined;
+  const keepFeishuCreatableOnly = useCallback(() => {
+    setSelectedTaskIds((current) => current.filter((taskId) => !feishuApprovalBlockReasons[taskId]));
+  }, [feishuApprovalBlockReasons]);
 
   function selectProvider(provider: "deepseek" | "openai") {
     setConfigForm((current) => ({
@@ -487,6 +758,168 @@ export default function App() {
     }
   }
 
+  async function beginFeishuBinding() {
+    if (!feishuCanBind) {
+      setFeishuError("当前还不能发起飞书授权。请先按第 2 步在飞书开放平台登记回调地址，并由部署人员标记已核验。");
+      return;
+    }
+    setFeishuBusy(true);
+    setFeishuError("");
+    try {
+      const { authorizeUrl } = await startFeishuOAuth(feishuAlias);
+      window.location.href = authorizeUrl;
+    } catch (error) {
+      setFeishuError(errorMessage(error, "暂时无法发起飞书授权。"));
+    } finally {
+      setFeishuBusy(false);
+    }
+  }
+
+  async function copyFeishuRedirectUri() {
+    if (!feishuStatus.redirectUri) {
+      setFeishuCopyMessage("当前还没有可复制的回调地址。");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(feishuStatus.redirectUri);
+      setFeishuCopyMessage("已复制回调地址，粘贴到飞书开放平台的重定向 URL 设置中。");
+      notify("已复制回调地址");
+    } catch {
+      setFeishuCopyMessage("复制失败，请手动选中下方地址复制。");
+    }
+  }
+
+  async function prepareFeishuRedirectSetup() {
+    if (!feishuStatus.redirectUri) {
+      setFeishuCopyMessage("当前还没有可复制的回调地址。");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(feishuStatus.redirectUri);
+      setFeishuCopyMessage("已复制回调地址，并打开飞书当前应用的安全设置页。请在重定向 URL / OAuth 回调地址处粘贴保存。");
+      notify("已复制并打开飞书后台");
+    } catch {
+      setFeishuCopyMessage("已打开飞书当前应用的安全设置页，但复制失败；请手动选中下方地址复制后粘贴。");
+    }
+  }
+
+  async function copyFeishuOptionalSetup(text: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setFeishuCopyMessage(`已复制${label}说明。`);
+      notify("已复制配置说明");
+    } catch {
+      setFeishuCopyMessage("复制失败，请手动选中说明文字复制。");
+    }
+  }
+
+  function updateFeishuSettingsForm(field: keyof typeof feishuSettingsForm, value: string | boolean) {
+    setFeishuSettingsForm((current) => ({ ...current, [field]: value }));
+    setFeishuError("");
+    setFeishuCopyMessage("");
+  }
+
+  async function readFeishuTasklists() {
+    const query = feishuTasklistQuery.trim();
+    if (!query) {
+      setFeishuError("请先输入飞书清单名称关键词，再读取清单。");
+      setFeishuTasklistIssue("");
+      return;
+    }
+    if (!feishuCanBind) {
+      setFeishuError("读取飞书清单前，需要先完成飞书应用配置和成员授权绑定。");
+      setFeishuTasklistIssue("auth");
+      return;
+    }
+    setFeishuTasklistBusy(true);
+    setFeishuError("");
+    setFeishuCopyMessage("");
+    try {
+      const result = await searchFeishuTasklists(query);
+      setFeishuTasklistOptions(result.items);
+      setFeishuTasklistIssue("");
+      setFeishuCopyMessage(result.items.length
+        ? `已读取 ${result.items.length} 个飞书清单，授权用户：${result.tokenUserName}。请选择一个清单。`
+        : `没有找到名称包含“${result.query}”的飞书清单，可换关键词或粘贴清单链接。`);
+    } catch (error) {
+      const message = errorMessage(error, "飞书清单暂时无法读取，可先粘贴清单链接或 ID。");
+      setFeishuTasklistOptions([]);
+      setFeishuTasklistIssue(/任务清单读取权限|临时用户授权|重新绑定|授权任务清单读取|缺少任务清单/i.test(message) ? "auth" : "");
+      setFeishuError(message);
+    } finally {
+      setFeishuTasklistBusy(false);
+    }
+  }
+
+  function chooseFeishuTasklist(option: FeishuTasklistOption) {
+    setFeishuSettingsForm((current) => ({ ...current, tasklistGuid: option.id, tasklistSectionGuid: "" }));
+    setFeishuCopyMessage(`已选择清单“${option.name}”。如需分组，请继续选择下方分组后保存。`);
+    setFeishuError("");
+  }
+
+  function chooseFeishuTasklistSection(option: FeishuTasklistOption, sectionId: string, sectionName: string) {
+    setFeishuSettingsForm((current) => ({ ...current, tasklistGuid: option.id, tasklistSectionGuid: sectionId }));
+    setFeishuCopyMessage(`已选择清单“${option.name}” / 分组“${sectionName}”，保存后新任务会写入这里。`);
+    setFeishuError("");
+  }
+
+  async function saveFeishuAdvancedSettings() {
+    if (!feishuStatus.configured) {
+      setFeishuError("请先完成飞书应用 App ID 和 App Secret 配置，再保存飞书任务写入设置。");
+      return;
+    }
+    const tasklistGuid = feishuSettingsForm.tasklistGuid.trim();
+    const tasklistSectionGuid = feishuSettingsForm.tasklistSectionGuid.trim();
+    if (tasklistSectionGuid && !tasklistGuid) {
+      setFeishuError("指定清单分组前，需要先填写或粘贴飞书清单。");
+      return;
+    }
+    setFeishuSettingsBusy(true);
+    setFeishuError("");
+    try {
+      const nextStatus = await saveFeishuSettings({
+        tasklistGuid: tasklistGuid || null,
+        tasklistSectionGuid: tasklistSectionGuid || null,
+        dueReminderMinutes: feishuSettingsForm.dueReminderMinutes,
+        syncComments: feishuSettingsForm.syncComments,
+      });
+      setFeishuStatus(nextStatus);
+      setFeishuSettingsForm({
+        tasklistGuid: nextStatus.tasklistGuid || "",
+        tasklistSectionGuid: nextStatus.tasklistSectionGuid || "",
+        dueReminderMinutes: nextStatus.dueReminderMinutes.join(", "),
+        syncComments: nextStatus.syncComments,
+      });
+      await refreshConnectorsStatus();
+      setFeishuCopyMessage("飞书任务写入设置已保存到本机；之后创建的新飞书任务会使用这些设置。");
+      notify("飞书写入设置已保存");
+    } catch (error) {
+      setFeishuError(errorMessage(error, "飞书任务写入设置暂时无法保存。"));
+    } finally {
+      setFeishuSettingsBusy(false);
+    }
+  }
+
+  async function confirmFeishuRedirectSaved() {
+    if (!feishuStatus.configured || !feishuStatus.redirectUri) {
+      setFeishuError("当前还没有可核验的飞书回调地址。请先完成飞书应用配置。");
+      return;
+    }
+    setFeishuBusy(true);
+    setFeishuError("");
+    try {
+      const nextStatus = await markFeishuRedirectVerified();
+      setFeishuStatus(nextStatus);
+      void refreshConnectorsStatus();
+      setFeishuCopyMessage("");
+      notify("飞书回调地址已核验");
+    } catch (error) {
+      setFeishuError(errorMessage(error, "飞书回调地址状态暂时无法保存。"));
+    } finally {
+      setFeishuBusy(false);
+    }
+  }
+
   async function startAnalysis() {
     if (statusBusyId !== null || runRequiresResolution) return;
     if (!configStatus.configured) {
@@ -553,6 +986,7 @@ export default function App() {
       const { run: next } = await sendAgentCommand(run.id, { type: "approve_tasks", payload: { tasks: approvalDraft, selectedTaskIds } });
       if (!adoptRun(next, false, generation)) return;
       notify(next.state === "failed" ? "任务执行或验证未完成" : "任务已创建并完成回读验证");
+      void refreshConnectorsStatus();
     } catch (error) {
       const message = errorMessage(error, "任务创建没有完成。");
       if (generation !== runGenerationRef.current) return;
@@ -606,11 +1040,18 @@ export default function App() {
     const generation = runGenerationRef.current;
     setBusy("message");
     setRunError("");
+    setConversationError("");
     try {
       const next = await sendAgentMessage(run.id, content);
-      return adoptRun(next, false, generation);
+      const adopted = adoptRun(next, false, generation);
+      if (adopted) setConversationError("");
+      return adopted;
     } catch (error) {
-      if (generation === runGenerationRef.current) setRunError(errorMessage(error, "消息没有发送成功。"));
+      if (generation === runGenerationRef.current) {
+        const message = errorMessage(error, "消息没有发送成功。");
+        setRunError(message);
+        setConversationError(message);
+      }
       return false;
     } finally {
       if (generation === runGenerationRef.current) setBusy(null);
@@ -626,7 +1067,17 @@ export default function App() {
     try {
       const next = await confirmAgentAction(run.id, actionId, approved);
       if (!adoptRun(next, false, generation)) return;
-      notify(approved ? actionType === "edit_task" ? "任务信息已更新" : "状态已更新" : "操作已取消");
+      if (approved && actionType === "update_feishu_settings") {
+        await refreshFeishuStatus();
+        await refreshConnectorsStatus();
+      }
+      notify(approved
+        ? actionType === "edit_task"
+          ? "任务信息已更新"
+          : actionType === "update_feishu_settings"
+            ? "飞书写入设置已更新"
+            : "状态已更新"
+        : "操作已取消");
     } catch (error) {
       if (generation === runGenerationRef.current) setRunError(errorMessage(error, "操作确认没有完成。"));
     } finally {
@@ -643,6 +1094,7 @@ export default function App() {
     setApprovalDraft([]);
     setSelectedTaskIds([]);
     setRunError("");
+    setConversationError("");
     setStudioOpen(true);
     window.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   }
@@ -732,6 +1184,7 @@ export default function App() {
                 <button className="model-trigger visual-trigger" type="button" onClick={() => setVisualOpen((open) => !open)} aria-expanded={visualOpen} aria-controls="visual-control" aria-label="调整中央画布通透度"><Eye /><span className="engine-label">通透度</span></button>
               </div>
               <button className="model-trigger" type="button" onClick={() => setSkillsOpen(true)} aria-label="打开用户 Markdown Skill"><UsersThree /><span className="engine-label">用户 Skills</span></button>
+              <button className="model-trigger" type="button" onClick={() => setFeishuOpen(true)} aria-label="打开平台连接"><span className="engine-label"><i className={feishuStatus.configured ? "ai" : "unconfigured"} />平台连接</span></button>
               <button className="model-trigger" type="button" onClick={() => setConfigOpen(true)} aria-label="打开模型连接设置"><span className="engine-label"><i className={configStatus.configured ? "ai" : "unconfigured"} />{configStatus.configured ? `${configStatus.provider} · ${configStatus.model}` : "未连接模型"}</span><SlidersHorizontal /></button>
               <button className="nav-cta liquid-glass" type="button" onClick={() => setStudioOpen(true)}>放入纪要</button>
               <button ref={menuButtonRef} className="menu-button" type="button" aria-label={menuOpen ? "关闭菜单" : "打开菜单"} aria-expanded={menuOpen} aria-controls="mobile-menu" onClick={() => setMenuOpen((open) => !open)}>{menuOpen ? <X /> : <ListChecks />}</button>
@@ -743,6 +1196,7 @@ export default function App() {
               <a href="#workflow" onClick={() => setMenuOpen(false)}>执行轨道</a>
               <a href="#results" onClick={() => setMenuOpen(false)}>任务结果</a>
               <button type="button" onClick={() => { menuButtonRef.current?.focus(); setSkillsOpen(true); setMenuOpen(false); }}><UsersThree /> 用户 Skills</button>
+              <button type="button" onClick={() => { menuButtonRef.current?.focus(); setFeishuOpen(true); setMenuOpen(false); }}>平台连接</button>
               <button type="button" onClick={() => { menuButtonRef.current?.focus(); setConfigOpen(true); setMenuOpen(false); }}><Key /> 模型连接</button>
               <button type="button" onClick={() => { setStudioOpen(true); setMenuOpen(false); }}>放入纪要</button>
               <button type="button" onClick={() => { setVisualOpen((open) => !open); setMenuOpen(false); }}><Eye /> 调整通透度</button>
@@ -758,7 +1212,7 @@ export default function App() {
             {!studioOpen ? (
               <div className="hero-actions reveal reveal-actions">
                 <button className="access-button" type="button" onClick={() => setStudioOpen(true)}>放入会议纪要</button>
-                <p className="demo-caption">两种写法覆盖同一组能力：一份便于核对字段，一份模拟多人逐句发言的真实会议速记。</p>
+                <p className="demo-caption">一个样本覆盖主要验收点：真实对话式纪要、部分批准、单条飞书写入、澄清、别名、优先级、依赖风险和非任务讨论。</p>
                 <div className="demo-presets" aria-label="演示输入">
                   {DEMO_CASES.map((demo) => (
                     <button
@@ -868,7 +1322,7 @@ export default function App() {
             {run && (
               <div className="agent-workspace-grid">
                 <div className="agent-workspace-main">
-                  <AgentConversation run={run} busy={busy !== null || statusBusyId !== null} onSend={submitMessage} onConfirm={(actionId, approved) => void confirmPendingAction(actionId, approved)} />
+                  <AgentConversation run={run} busy={busy !== null || statusBusyId !== null} error={conversationError} onSend={submitMessage} onConfirm={(actionId, approved) => void confirmPendingAction(actionId, approved)} />
 
                   {run.state === "clarifying" && (
                     <ClarificationPanel
@@ -886,9 +1340,14 @@ export default function App() {
                       tasks={approvalDraft}
                       selectedTaskIds={selectedTaskIds}
                       busy={busy !== null}
+                      connectorName={connectorName}
+                      taskBlockReasons={feishuApprovalBlockReasons}
+                      approvalBlockMessage={feishuApprovalBlockMessage}
                       onTasksChange={setApprovalDraft}
                       onSelectionChange={setSelectedTaskIds}
                       onApprove={() => void approveTasks()}
+                      onResolveApprovalBlock={() => setFeishuOpen(true)}
+                      onKeepCreatableOnly={keepFeishuCreatableOnly}
                     />
                   )}
 
@@ -898,9 +1357,15 @@ export default function App() {
                       tasks={run.created_tasks}
                       tracking={run.tracking}
                       busy={busy !== null || statusBusyId !== null || !!run.pending_action}
+                      refreshing={busy === "track"}
+                      connectorName={connectorName}
+                      supportsStatusUpdate={supportsStatusUpdate}
+                      statusOptions={statusOptions}
                       statusBusyId={statusBusyId}
                       onRefresh={() => void refreshTracking()}
                       onStatusChange={(externalId, status) => void changeTaskStatus(externalId, status)}
+                      onOpenPlatformConnection={() => setFeishuOpen(true)}
+                      feishuPermissionUrl={run.connector_id === "feishu" ? feishuPermissionUrl : undefined}
                     />
                   )}
 
@@ -909,6 +1374,7 @@ export default function App() {
                       <WarningCircle weight="fill" />
                       <div><h3 id="failed-title">本次执行或验证未完成</h3><p>成功步骤已保留。请查看执行与回读记录，并使用原批准范围安全重试，已有任务会按幂等键复用。</p></div>
                       <div className="outcome-actions">
+                        {run.connector_id === "feishu" && <button type="button" onClick={() => setFeishuOpen(true)}>打开平台连接</button>}
                         <button type="button" onClick={() => void approveTasks()} disabled={busy === "approve"}>{busy === "approve" ? "正在安全重试…" : "安全重试原运行"}</button>
                       </div>
                     </section>
@@ -930,14 +1396,14 @@ export default function App() {
                       <ol>{analysis.decisions.map((item) => <li key={item}>{item}</li>)}</ol>
                     </section>
                   )}
-                  <ExecutionLog events={run.events} live={isExecutionActive} />
+                  <ExecutionLog events={run.events} live={isExecutionActive} connectorName={connectorName} />
                 </aside>
               </div>
             )}
           </div>
         </section>
 
-        <footer className="site-footer"><span>会议行动智能体 / 本地任务中心</span><span>先确认，再执行。<ArrowUpRight /></span></footer>
+        <footer className="site-footer"><span>会议行动智能体 / {connectorName}</span><span>先确认，再执行。<ArrowUpRight /></span></footer>
       </div>
 
       {configOpen && (
@@ -954,6 +1420,292 @@ export default function App() {
             <p className="secret-note" id="config-description"><Key /> Key 保存在本机专用配置文件中，不写入浏览器、任务数据或 Git；本机其他用户若能读取项目目录，仍可能访问该 Key。</p>
             <div className="config-feedback" aria-live="polite">{configError ? <span className="is-error">{configError}</span> : configMessage ? <span className="is-success"><Check /> {configMessage}</span> : <span>先测试，再保存到当前运行。</span>}</div>
             <footer className="config-actions"><button className="clear-config" type="button" onClick={() => void configRequest("/api/config", "DELETE", "clear")} disabled={!!configBusy || configStatus.source !== "persistent"}>移除本机配置</button><div><button type="button" onClick={() => void configRequest("/api/config/test", "POST", "test")} disabled={!!configBusy}>{configBusy === "test" ? "正在连接…" : "测试连接"}</button><button className="save-config" type="button" onClick={() => void configRequest("/api/config", "POST", "save")} disabled={!!configBusy}>{configBusy === "save" ? "正在保存…" : "保存连接"} <ArrowRight /></button></div></footer>
+          </section>
+        </div>
+      )}
+
+      {feishuOpen && (
+        <div className="config-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeFeishu(); }}>
+          <section ref={feishuPanelRef} className="config-panel platform-panel liquid-glass" role="dialog" aria-modal="true" aria-labelledby="feishu-title" aria-describedby="feishu-description">
+            <header className="config-head platform-panel-head"><div><p>PLATFORM CONNECTIONS</p><h2 id="feishu-title">连接办公<em>平台。</em></h2></div><button type="button" onClick={closeFeishu} aria-label="关闭平台连接" title="关闭"><X /></button></header>
+            <div className="platform-panel-body">
+            <p className="secret-note platform-intro" id="feishu-description"><Key /> 这里统一管理真实任务平台。当前先接入飞书任务，后续 Trello、Todoist 等平台也应放在这里，不再占用头栏入口。</p>
+            <div className="integration-card">
+              <header className="integration-card-head"><div><span>飞书任务</span><small>用于把审批后的行动项写入飞书任务，并按 GUID 回读验证。</small></div><strong>{feishuStatus.enabled ? "当前默认" : feishuStatus.configured ? "已配置" : "未配置"}</strong></header>
+              <div className={`config-status ${feishuCanBind ? "connected" : ""}`}><i /><div><span>{feishuStatusTitle}</span><small>{feishuStatusDetail}</small></div></div>
+              <div className="feishu-feature-grid" aria-label="飞书接入能力">
+                {feishuFeatureBadges.map((feature) => (
+                  <div className={feature.active ? "is-active" : ""} key={feature.label}>
+                    <span>{feature.label}</span>
+                    <strong>{feature.value}</strong>
+                  </div>
+                ))}
+              </div>
+              <section className="feishu-optional-setup" aria-label="飞书任务写入设置">
+                <header>
+                  <div>
+                    <span>飞书任务写入设置</span>
+                    <p>这里决定 Agent 创建新飞书任务时默认放到哪里、提前多久提醒，以及是否把操作记录写入任务评论。</p>
+                  </div>
+                  <strong>{feishuAdvancedReadyCount} / {feishuAdvancedItems.length} 已启用 · {feishuSettingsSourceLabel}</strong>
+                </header>
+                <div className="feishu-settings-form" aria-label="飞书任务写入设置表单">
+                  <label className="feishu-setting-card">
+                    <span>飞书清单</span>
+                    <div className="feishu-tasklist-search">
+                      <input
+                        value={feishuTasklistQuery}
+                        onChange={(event) => setFeishuTasklistQuery(event.target.value)}
+                        placeholder={feishuStatus.tasklistDiscoveryReady ? "输入清单名称关键词" : "输入关键词；如过期请重新绑定成员"}
+                        disabled={feishuTasklistBusy || !feishuCanBind}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void readFeishuTasklists()}
+                        disabled={feishuTasklistBusy || !feishuCanBind}
+                      >
+                        {feishuTasklistBusy ? "读取中…" : "读取清单"}
+                      </button>
+                    </div>
+                    {feishuTasklistIssue === "auth" && (
+                      <div className="feishu-tasklist-help" role="status" aria-live="polite">
+                        <div>
+                          <WarningCircle />
+                          <div>
+                            <strong>需要先补飞书权限，然后重新授权</strong>
+                            <p>这不是清单名称输错，而是当前飞书应用或当前成员还没有给“读取任务清单”的权限。</p>
+                          </div>
+                        </div>
+                        <ol>
+                          <li>打开飞书开放平台当前应用的“权限管理”。</li>
+                          <li>搜索并开通任务 / 任务清单读取相关权限，保存并发布应用。</li>
+                          <li>回到这里点击“重新绑定飞书成员”，授权完成后再点“读取清单”。</li>
+                        </ol>
+                        <div className="tasklist-help-actions">
+                          <a href={feishuPermissionUrl} target="_blank" rel="noreferrer">
+                            打开权限管理 <ArrowUpRight />
+                          </a>
+                          <button type="button" onClick={() => void beginFeishuBinding()} disabled={feishuBusy || !feishuCanBind}>
+                            重新绑定飞书成员
+                          </button>
+                          <button type="button" onClick={() => void copyFeishuOptionalSetup(feishuTasklistPermissionGuide, "清单读取权限")}>
+                            复制给管理员
+                          </button>
+                        </div>
+                        <small>如果暂时不处理权限，也可以继续在下面粘贴飞书清单链接或清单 ID。</small>
+                      </div>
+                    )}
+                    {feishuTasklistOptions.length > 0 && (
+                      <div className="feishu-tasklist-options" aria-label="可选择的飞书清单">
+                        {feishuTasklistOptions.map((option) => (
+                          <article className={feishuSettingsForm.tasklistGuid === option.id ? "is-selected" : ""} key={option.id}>
+                            <button type="button" onClick={() => chooseFeishuTasklist(option)}>
+                              <strong>{option.name}</strong>
+                              <small>{option.id}</small>
+                            </button>
+                            {option.sections.length > 0 && (
+                              <div>
+                                {option.sections.map((section) => (
+                                  <button
+                                    type="button"
+                                    className={feishuSettingsForm.tasklistGuid === option.id && feishuSettingsForm.tasklistSectionGuid === section.id ? "is-selected" : ""}
+                                    key={section.id}
+                                    onClick={() => chooseFeishuTasklistSection(option, section.id, section.name)}
+                                  >
+                                    {section.name}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                    <input
+                      value={feishuSettingsForm.tasklistGuid}
+                      onChange={(event) => updateFeishuSettingsForm("tasklistGuid", event.target.value)}
+                      placeholder="粘贴清单链接，或填写清单 ID"
+                      disabled={feishuSettingsBusy || !feishuStatus.configured}
+                    />
+                    <small>先输入清单名称关键词，再点“读取清单”。服务重启或授权过期后可能需要重新绑定飞书成员；读取失败时仍可粘贴清单链接或 ID。</small>
+                  </label>
+                  <label className="feishu-setting-card">
+                    <span>清单分组（可选）</span>
+                    <input
+                      value={feishuSettingsForm.tasklistSectionGuid}
+                      onChange={(event) => updateFeishuSettingsForm("tasklistSectionGuid", event.target.value)}
+                      placeholder="粘贴分组链接，或填写分组 ID"
+                      disabled={feishuSettingsBusy || !feishuStatus.configured}
+                    />
+                    <small>对应清单里的分组 / 区域。只有指定飞书清单后才生效；不分组可留空。</small>
+                  </label>
+                  <div className="feishu-setting-card feishu-reminder-field">
+                    <span>新建任务提醒</span>
+                    <div className="feishu-reminder-presets" role="group" aria-label="新建飞书任务提醒">
+                      {feishuReminderPresets.map((preset) => {
+                        const active = normalizeReminderInput(feishuSettingsForm.dueReminderMinutes) === preset.value;
+                        return (
+                          <button
+                            type="button"
+                            key={preset.label}
+                            className={active ? "is-active" : ""}
+                            onClick={() => updateFeishuSettingsForm("dueReminderMinutes", preset.value)}
+                            disabled={feishuSettingsBusy || !feishuStatus.configured}
+                            aria-pressed={active}
+                          >
+                            <strong>{preset.label}</strong>
+                            <small>{preset.helper}</small>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <label className="feishu-custom-reminder">
+                      <span>自定义提醒分钟（可选）</span>
+                      <input
+                        value={feishuSettingsForm.dueReminderMinutes}
+                        onChange={(event) => updateFeishuSettingsForm("dueReminderMinutes", event.target.value)}
+                        placeholder="例如 1440, 30"
+                        disabled={feishuSettingsBusy || !feishuStatus.configured}
+                      />
+                    </label>
+                    <small>只影响本系统之后创建到飞书的任务，不会修改飞书客户端/账号里的任务默认提醒时间。多条提醒用英文逗号分隔；1440 表示提前 1 天。</small>
+                  </div>
+                  <label className="feishu-setting-card feishu-toggle-field">
+                    <span>操作记录写入评论</span>
+                    <button
+                      type="button"
+                      className={feishuSettingsForm.syncComments ? "is-on" : ""}
+                      onClick={() => updateFeishuSettingsForm("syncComments", !feishuSettingsForm.syncComments)}
+                      disabled={feishuSettingsBusy || !feishuStatus.configured}
+                      aria-pressed={feishuSettingsForm.syncComments}
+                    >
+                      {feishuSettingsForm.syncComments ? "已启用" : "未启用"}
+                    </button>
+                    <small>对应飞书任务详情里的评论 / 动态。启用后，创建、状态同步和字段修改会尝试留下记录；权限不足时不阻断主写入。</small>
+                  </label>
+                  {(hasFeishuCommentPermissionIssue || feishuSettingsForm.syncComments) && (
+                    <div className={hasFeishuCommentPermissionIssue ? "feishu-permission-callout is-warning" : "feishu-permission-callout"} role={hasFeishuCommentPermissionIssue ? "alert" : "note"}>
+                      <div>
+                        <WarningCircle />
+                        <div>
+                          <strong>{hasFeishuCommentPermissionIssue ? "评论同步缺少飞书权限" : "评论同步还需要飞书应用权限"}</strong>
+                          <p>{hasFeishuCommentPermissionIssue
+                            ? "本系统已经保留主任务写入结果，但飞书拒绝写入评论。需要在飞书开放平台给当前应用补权限。"
+                            : "开关只代表本系统会尝试写入评论；真实飞书是否能写入，仍取决于当前应用是否开通评论权限并发布。"}</p>
+                        </div>
+                      </div>
+                      <ol>
+                        <li>打开飞书开放平台当前应用的“权限管理”。</li>
+                        <li>搜索并开通 <code>task:comment:write</code>；如需读取评论核验，再开通 <code>task:comment:read</code>。</li>
+                        <li>保存并发布应用后，回到本系统重新检查连接，再用测试任务复测状态或字段写回。</li>
+                      </ol>
+                      <div className="tasklist-help-actions">
+                        <a href={feishuPermissionUrl} target="_blank" rel="noreferrer">
+                          打开权限管理 <ArrowUpRight />
+                        </a>
+                        <button type="button" onClick={() => void copyFeishuOptionalSetup(feishuCommentPermissionGuide, "评论权限")}>
+                          复制给管理员
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  <div className="feishu-settings-actions">
+                    <button type="button" onClick={() => void saveFeishuAdvancedSettings()} disabled={feishuSettingsBusy || !feishuStatus.configured}>
+                      {feishuSettingsBusy ? "正在保存…" : "保存写入设置"}
+                    </button>
+                  </div>
+                </div>
+                <div className="feishu-setup-list">
+                  {feishuAdvancedItems.map((item) => (
+                    <article className={item.active ? "is-active" : ""} key={item.label}>
+                      <div className="setup-card-head">
+                        <div>
+                          <span>{item.label}</span>
+                          <strong>{item.status}</strong>
+                        </div>
+                        <i aria-hidden="true" />
+                      </div>
+                      <p>{item.summary}</p>
+                      <div className="setup-mode">
+                        <span>{item.active ? "复测状态" : "当前限制"}</span>
+                        <strong>{item.availability}</strong>
+                      </div>
+                      <ul className={`setup-steps ${item.active ? "is-checklist" : "is-blockers"}`}>
+                        {item.details.map((detail) => (
+                          <li key={detail}>{detail}</li>
+                        ))}
+                      </ul>
+                      <small>{item.impact}</small>
+                      <div className="setup-actions">
+                        <button type="button" onClick={() => void copyFeishuOptionalSetup(item.copyText, item.label)}>
+                          {item.copyLabel}
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                <details className="feishu-advanced-note">
+                  <summary>高级填写说明</summary>
+                  <p>优先粘贴飞书清单或分组链接；如果链接无法识别，再填写飞书接口中的清单 ID / 分组 ID。页面保存值优先生效，环境变量只作为部署兜底。</p>
+                </details>
+              </section>
+              <div className="connection-guide" aria-label="飞书连接向导">
+                <div className="guide-now">
+                  <span>当前步骤 {feishuGuideStep} / 4</span>
+                  <strong>{feishuGuideTitle}</strong>
+                  <p>{feishuGuideBody}</p>
+                  {feishuGuideStep === 2 && (
+                    <div className="guide-actions">
+                      {feishuStatus.redirectUri ? (
+                        <a className="guide-primary-action" href={feishuSecurityUrl} target="_blank" rel="noreferrer" onClick={() => void prepareFeishuRedirectSetup()}>
+                          复制地址并打开飞书安全设置 <ArrowUpRight />
+                        </a>
+                      ) : (
+                        <button type="button" className="guide-primary-action" disabled>
+                          复制地址并打开飞书安全设置 <ArrowUpRight />
+                        </button>
+                      )}
+                      <button type="button" className="guide-confirm-action" onClick={() => void confirmFeishuRedirectSaved()} disabled={feishuBusy || !feishuStatus.redirectUri}>
+                        我已在飞书保存，继续绑定 <Check />
+                      </button>
+                      <small>飞书后台不允许本系统跨站替你保存设置；打开后只需要粘贴并保存。</small>
+                    </div>
+                  )}
+                </div>
+                <ol className="guide-steps">
+                  <li className={guideStepClass(1)}><b>1</b><div><strong>配置飞书应用</strong><span>部署人员在本机配置 App ID、App Secret，并把任务平台设为飞书。</span></div></li>
+                  <li className={guideStepClass(2)}><b>2</b><div><strong>登记回调地址</strong><span>本系统复制回调地址并打开飞书安全设置，部署人员在后台粘贴保存。</span></div></li>
+                  <li className={guideStepClass(3)}><b>3</b><div><strong>绑定成员身份</strong><span>成员输入系统姓名或别名，跳转飞书确认身份后返回本系统。</span></div></li>
+                  <li className={guideStepClass(4)}><b>4</b><div><strong>审批后写入飞书</strong><span>回到会议 Agent，分析纪要并人工批准后创建飞书任务。</span></div></li>
+                </ol>
+              </div>
+              <section className="feishu-bind-panel" aria-label="绑定飞书成员身份">
+                <p className="secret-note"><Key /> {feishuSetupHint} 系统只保存任务负责人匹配所需的身份映射，不把飞书用户令牌写入任务记录或 Git。</p>
+                <div className="config-fields">
+                  <label className="config-field"><span>第 3 步：系统成员名或别名</span><input value={feishuAlias} onChange={(event) => setFeishuAlias(event.target.value)} placeholder={feishuCanBind ? "例如：张三、老张；留空则使用飞书姓名" : "第 2 步完成后再填写成员名"} spellCheck={false} disabled={!feishuCanBind} /></label>
+                </div>
+              </section>
+            <div className="feishu-linked-users">
+              <header><span>已绑定身份</span><button type="button" onClick={() => void refreshFeishuStatus()} disabled={feishuBusy}>刷新</button></header>
+              {feishuStatus.linkedUsers.length ? (
+                <ul>{feishuStatus.linkedUsers.map((user) => <li key={user.id}><strong>{user.name}</strong><span>{user.aliases.length ? `别名：${user.aliases.join("、")}` : "未设置别名"}</span><small>{user.emailPreview || "邮箱未展示"} · {user.hasOpenId ? "open_id 已保存" : "缺少 open_id"}</small></li>)}</ul>
+              ) : <p>还没有绑定飞书成员。要创建带负责人的飞书任务，需要先完成至少一个成员身份绑定。</p>}
+            </div>
+            <details className="feishu-deploy-note" open={feishuGuideStep <= 2}>
+              <summary>部署配置参考</summary>
+              <p>第 2 步由部署人员完成：点击上方主按钮后，本系统会复制下面的地址并打开飞书当前应用的安全设置页。把地址粘贴到重定向 URL / OAuth 回调地址设置中并保存；保存后回到这里点“我已在飞书保存，继续绑定”，系统会在本机记录核验状态并开放成员绑定。</p>
+              <div className="deploy-copy-row">
+                <label className="config-field"><span>OAuth 回调地址</span><input value={feishuStatus.redirectUri || "尚未可用"} readOnly /></label>
+                <button type="button" onClick={() => void copyFeishuRedirectUri()} disabled={!feishuStatus.redirectUri}>只复制地址</button>
+              </div>
+              <p className="copy-feedback">{feishuCopyMessage || "优先使用上方主按钮；飞书里保存完成后，不需要改配置文件，直接点“我已在飞书保存”。"}</p>
+            </details>
+            </div>
+            </div>
+            <footer className="config-actions platform-actions">
+              <div className="platform-action-feedback" aria-live="polite">{feishuError ? <span className="is-error">{feishuError}</span> : <span>{feishuCanBind ? "点击绑定后会跳转到飞书，由飞书确认身份后返回本系统。" : "当前只能查看状态；在飞书里保存回调地址后，点“我已在飞书保存，继续绑定”。"}</span>}</div>
+              <div className="platform-action-buttons"><button type="button" onClick={() => void refreshFeishuStatus()} disabled={feishuBusy}>重新检查</button><button className="save-config" type="button" onClick={() => void beginFeishuBinding()} disabled={feishuBusy || !feishuCanBind}>{feishuBusy ? "正在发起授权…" : "绑定当前飞书用户"} <ArrowRight /></button></div>
+            </footer>
           </section>
         </div>
       )}

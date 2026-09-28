@@ -6,6 +6,7 @@ import { TeamContextSchema, type TeamContext } from "./team-context.ts";
 
 export type AgentState = "analyzing" | "clarifying" | "awaiting_approval" | "executing" | "verifying" | "tracking" | "completed" | "failed";
 export type AgentQuestionField = "owner" | "due_date" | "confirm" | "general" | "priority";
+export type ConnectorId = "local-task" | "feishu";
 
 export type AgentEvent = {
   id: string;
@@ -58,6 +59,23 @@ export type ConversationTurn = {
 };
 
 export type TaskFieldChanges = Partial<Pick<AgentTask, "title" | "description" | "owner" | "due_date" | "priority">>;
+export type FeishuSettingsChangeSet = Partial<{
+  tasklistGuid: string | null;
+  tasklistSectionGuid: string | null;
+  dueReminderMinutes: number[];
+  syncComments: boolean;
+}>;
+
+export type QueuedAgentPlan = {
+  intent: "propose_status" | "propose_task_edit" | "propose_task_reminders" | "propose_task_comment" | "explain" | "unsure";
+  external_task_id: string | null;
+  status: "todo" | "in_progress" | "done" | null;
+  task_id: string | null;
+  field_changes: TaskFieldChanges;
+  due_reminder_minutes: number[];
+  comment: string;
+  reply: string;
+};
 
 export type PendingAgentAction = {
   id: string;
@@ -74,6 +92,29 @@ export type PendingAgentAction = {
   changes: TaskFieldChanges;
   expected: TaskFieldChanges;
   created_at: string;
+} | {
+  id: string;
+  type: "update_feishu_settings";
+  changes: FeishuSettingsChangeSet;
+  expected: FeishuSettingsChangeSet;
+  queued_message?: string;
+  queued_summary?: string;
+  queued_plan?: QueuedAgentPlan;
+  created_at: string;
+} | {
+  id: string;
+  type: "sync_task_reminders";
+  task_id: string;
+  external_task_id: string;
+  dueReminderMinutes: number[];
+  created_at: string;
+} | {
+  id: string;
+  type: "add_task_comment";
+  task_id: string;
+  external_task_id: string;
+  comment: string;
+  created_at: string;
 };
 
 export type ModelInteraction = {
@@ -84,6 +125,7 @@ export type ModelInteraction = {
   user_prompt: string;
   model_output: string;
   normalized_intent: string;
+  duration_ms?: number;
 };
 
 export type ClarificationHistoryEntry = {
@@ -138,6 +180,9 @@ export type AnalysisTrace = {
 export type CreatedTaskRecord = {
   task_id: string;
   external_id: string;
+  external_url?: string | null;
+  connector_id: ConnectorId;
+  connector_name: string;
   title: string;
   description: string;
   owner: string | null;
@@ -165,6 +210,7 @@ export type TrackingSummary = {
 
 export type AgentRun = {
   id: string;
+  connector_id: ConnectorId;
   state: AgentState;
   analysis: AgentAnalysis;
   questions: AgentQuestion[];
@@ -193,6 +239,8 @@ export type AgentRun = {
 
 export type ExternalTask = {
   id: string;
+  external_url?: string | null;
+  connector_id: ConnectorId;
   idempotency_key: string;
   source_run_id: string;
   source_task_id: string;
@@ -212,7 +260,7 @@ export type ExternalTask = {
 };
 
 export type StoreData = {
-  schema_version: 4;
+  schema_version: 5;
   /** @deprecated legacy compatibility only. */
   legacy_team_context?: TeamContext;
   runs: Record<string, AgentRun>;
@@ -227,7 +275,7 @@ let writeQueue: Promise<void> = Promise.resolve();
 
 function emptyStore(): StoreData {
   return {
-    schema_version: 4,
+    schema_version: 5,
     legacy_team_context: undefined,
     runs: {},
     tasks: {},
@@ -256,8 +304,13 @@ function migrateTask(value: unknown): AgentTask {
 
 function migrateExternalTask(value: unknown): ExternalTask {
   if (!isRecord(value)) throw new Error("外部任务存储格式无效。");
+  const connectorId = value.connector_id === "feishu" ? "feishu" : "local-task";
+  const status = connectorId === "feishu" && value.status === "todo" ? "in_progress" : value.status;
   return {
-    ...(value as Omit<ExternalTask, "priority_reason" | "priority_evidence" | "dependencies" | "risk">),
+    ...(value as Omit<ExternalTask, "connector_id" | "priority_reason" | "priority_evidence" | "dependencies" | "risk">),
+    external_url: typeof value.external_url === "string" ? value.external_url : null,
+    connector_id: connectorId,
+    status: status === "done" || status === "in_progress" ? status : "todo",
     priority_reason: typeof value.priority_reason === "string" && value.priority_reason ? value.priority_reason : legacyPriorityReason(value.priority),
     priority_evidence: typeof value.priority_evidence === "string" ? value.priority_evidence : null,
     dependencies: Array.isArray(value.dependencies) ? value.dependencies.filter((item): item is string => typeof item === "string") : [],
@@ -265,10 +318,18 @@ function migrateExternalTask(value: unknown): ExternalTask {
   };
 }
 
-function migrateCreatedTask(value: unknown, source: AgentTask | undefined): CreatedTaskRecord {
+function migrateCreatedTask(value: unknown, source: AgentTask | undefined, connectorId: ConnectorId): CreatedTaskRecord {
   if (!isRecord(value)) throw new Error("创建结果存储格式无效。");
+  const recordConnectorId = value.connector_id === "feishu" ? "feishu" : connectorId;
+  const status = recordConnectorId === "feishu" && value.status === "todo" ? "in_progress" : value.status;
   return {
     ...(value as Pick<CreatedTaskRecord, "task_id" | "external_id" | "title" | "owner" | "due_date" | "status" | "verified" | "issues">),
+    external_url: typeof value.external_url === "string" ? value.external_url : null,
+    connector_id: recordConnectorId,
+    connector_name: typeof value.connector_name === "string" && value.connector_name
+      ? value.connector_name
+      : recordConnectorId === "feishu" ? "飞书任务" : "Local Task Hub",
+    status: status === "done" || status === "in_progress" ? status : "todo",
     description: typeof value.description === "string" ? value.description : source?.description || "",
     priority: value.priority === "high" || value.priority === "low" ? value.priority : source?.priority || "medium",
     priority_reason: typeof value.priority_reason === "string" ? value.priority_reason : source?.priority_reason || legacyPriorityReason(value.priority),
@@ -327,8 +388,9 @@ function migrateRun(value: unknown): AgentRun {
           resolved_at: null,
         })),
     ];
+  const connectorId: ConnectorId = value.connector_id === "feishu" ? "feishu" : "local-task";
   const createdTasks = Array.isArray(value.created_tasks)
-    ? value.created_tasks.map((record) => migrateCreatedTask(record, tasks.find((task) => isRecord(record) && task.id === record.task_id)))
+    ? value.created_tasks.map((record) => migrateCreatedTask(record, tasks.find((task) => isRecord(record) && task.id === record.task_id), connectorId))
     : [];
   const trace = isRecord(value.analysis_trace)
     && typeof value.analysis_trace.system_prompt === "string"
@@ -340,6 +402,7 @@ function migrateRun(value: unknown): AgentRun {
 
   return {
     ...(value as unknown as AgentRun),
+    connector_id: connectorId,
     analysis: {
       ...(value.analysis as unknown as AgentAnalysis),
       tasks,
@@ -354,7 +417,7 @@ function migrateRun(value: unknown): AgentRun {
     events: Array.isArray(value.events) ? value.events as AgentEvent[] : [],
     conversation: Array.isArray(value.conversation) ? value.conversation as ConversationTurn[] : [],
     model_interactions: Array.isArray(value.model_interactions) ? value.model_interactions as ModelInteraction[] : [],
-    pending_action: isRecord(value.pending_action) && (value.pending_action.type === "set_task_status" || value.pending_action.type === "edit_task")
+    pending_action: isRecord(value.pending_action) && (value.pending_action.type === "set_task_status" || value.pending_action.type === "edit_task" || value.pending_action.type === "update_feishu_settings" || value.pending_action.type === "sync_task_reminders" || value.pending_action.type === "add_task_comment")
       ? value.pending_action as PendingAgentAction : null,
     overdue_task_ids: Array.isArray(value.overdue_task_ids) ? value.overdue_task_ids.filter((item): item is string => typeof item === "string") : [],
     skill_versions: skillVersions,
@@ -369,7 +432,7 @@ function migrateStore(value: unknown): StoreData {
   const rawRuns = isRecord(value.runs) ? value.runs : {};
   const rawTasks = isRecord(value.tasks) ? value.tasks : {};
   return {
-    schema_version: 4,
+    schema_version: 5,
     ...(value.legacy_team_context && typeof value.legacy_team_context === "object" ? { legacy_team_context: value.legacy_team_context as TeamContext } : {}),
     runs: Object.fromEntries(Object.entries(rawRuns).map(([id, run]) => [id, migrateRun(run)])),
     tasks: Object.fromEntries(Object.entries(rawTasks).map(([id, task]) => [id, migrateExternalTask(task)])),

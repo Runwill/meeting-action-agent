@@ -6,11 +6,13 @@ import { AnalysisServiceError, analyzeMeeting, isValidDateOnly } from "./analyze
 import OpenAI from "openai";
 import { ZodError } from "zod";
 import { clearPersistentModelConfig, getPublicModelConfig, savePersistentModelConfig } from "./runtime-config.ts";
-import { AgentOperationError, ApprovalPayloadSchema, ClarificationPayloadSchema, TaskStatusSchema, createAgentRun, getAgentRun } from "./agent.ts";
+import { AgentOperationError, ApprovalPayloadSchema, ClarificationPayloadSchema, TaskStatusSchema, createAgentRun, getAgentRun, getAgentRunForExternalTask } from "./agent.ts";
 import { AgentCommandSchema, dispatchAgentCommand } from "./agent-runtime.ts";
 import { confirmAgentAction, sendAgentMessage } from "./agent-chat.ts";
-import { localTaskConnector } from "./connectors/local-task.ts";
 import { listUserSkills, saveUserSkills } from "./user-skills.ts";
+import { listTaskConnectors } from "./connectors/index.ts";
+import { getPublicFeishuConfig } from "./feishu-config.ts";
+import { FeishuOAuthError, completeFeishuOAuth, createFeishuOAuthStart, defaultFeishuOAuthReturnUrl, getFeishuIntegrationStatus, markFeishuRedirectVerified, searchFeishuTasklists, updateFeishuAdvancedSettings } from "./feishu-oauth.ts";
 
 const app = express();
 const port = Number(process.env.PORT || 8788);
@@ -30,6 +32,100 @@ app.get("/api/health", async (_request, response) => {
 
 app.get("/api/config", async (_request, response) => {
   response.json(await getPublicModelConfig());
+});
+
+app.get("/api/connectors", (_request, response) => {
+  response.json({
+    connectors: listTaskConnectors(),
+    feishu: getPublicFeishuConfig(),
+  });
+});
+
+app.get("/api/integrations/feishu/status", async (_request, response) => {
+  try {
+    response.json(await getFeishuIntegrationStatus());
+  } catch {
+    response.status(500).json({ error: "飞书身份绑定状态暂时无法读取。" });
+  }
+});
+
+app.post("/api/integrations/feishu/oauth/start", async (request, response) => {
+  try {
+    response.json(createFeishuOAuthStart(request.body?.alias, request.body?.returnUrl));
+  } catch (error) {
+    if (error instanceof FeishuOAuthError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    response.status(500).json({ error: "飞书授权暂时无法发起。" });
+  }
+});
+
+app.post("/api/integrations/feishu/oauth/redirect-verified", async (_request, response) => {
+  try {
+    response.json(await markFeishuRedirectVerified());
+  } catch (error) {
+    if (error instanceof FeishuOAuthError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    response.status(500).json({ error: "飞书回调地址状态暂时无法保存。" });
+  }
+});
+
+app.put("/api/integrations/feishu/settings", async (request, response) => {
+  try {
+    response.json(await updateFeishuAdvancedSettings(request.body));
+  } catch (error) {
+    if (error instanceof FeishuOAuthError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    response.status(500).json({ error: "飞书高级能力配置暂时无法保存。" });
+  }
+});
+
+app.post("/api/integrations/feishu/tasklists/search", async (request, response) => {
+  try {
+    response.json(await searchFeishuTasklists(request.body));
+  } catch (error) {
+    if (error instanceof FeishuOAuthError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    response.status(500).json({ error: "飞书清单暂时无法读取。" });
+  }
+});
+
+function htmlEscape(value: string) {
+  return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]!));
+}
+
+function feishuOAuthResultPage(input: { title: string; heading: string; message: string; returnUrl: string; autoRedirect?: boolean }) {
+  const returnUrl = htmlEscape(input.returnUrl);
+  const metaRefresh = input.autoRedirect ? `<meta http-equiv="refresh" content="1.2;url=${returnUrl}">` : "";
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${metaRefresh}<title>${htmlEscape(input.title)}</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:radial-gradient(circle at 50% 20%,rgba(168,162,255,.2),transparent 34%),#07070c;color:#fff;line-height:1.7}.card{width:min(520px,calc(100% - 40px));padding:32px;border:1px solid rgba(255,255,255,.13);border-radius:24px;background:rgba(255,255,255,.045);box-shadow:0 24px 70px rgba(0,0,0,.45)}h1{margin:0 0 12px;font-size:28px;font-weight:650;letter-spacing:-.03em}p{margin:0 0 18px;color:rgba(255,255,255,.68)}a{display:inline-flex;align-items:center;min-height:42px;padding:0 16px;border-radius:999px;background:#fff;color:#08080d;text-decoration:none;font-size:14px;font-weight:650}</style></head><body><main class="card"><h1>${htmlEscape(input.heading)}</h1><p>${htmlEscape(input.message)}</p><a href="${returnUrl}">返回系统</a></main></body></html>`;
+}
+
+app.get("/api/integrations/feishu/oauth/callback", async (request, response) => {
+  try {
+    const result = await completeFeishuOAuth({ code: request.query.code, state: request.query.state });
+    response.type("html").send(feishuOAuthResultPage({
+      title: "飞书身份绑定完成",
+      heading: "飞书身份已绑定",
+      message: `${result.user.name} 已绑定到本系统。页面将自动回到会议行动智能体，你也可以点击下方按钮返回。`,
+      returnUrl: result.returnUrl,
+      autoRedirect: true,
+    }));
+  } catch (error) {
+    const message = error instanceof FeishuOAuthError ? error.message : "飞书身份绑定失败，请重新发起授权。";
+    response.status(error instanceof FeishuOAuthError ? error.status : 500).type("html").send(feishuOAuthResultPage({
+      title: "飞书身份绑定失败",
+      heading: "飞书身份绑定失败",
+      message,
+      returnUrl: defaultFeishuOAuthReturnUrl(),
+    }));
+  }
 });
 
 app.get("/api/user-skills", async (_request, response) => {
@@ -246,9 +342,9 @@ app.post("/api/agent/runs/:id/confirm-action", async (request, response) => {
 app.patch("/api/agent/tasks/:id", async (request, response) => {
   try {
     const status = TaskStatusSchema.parse(request.body).status;
-    const task = await localTaskConnector.getTask(request.params.id);
-    if (!task) throw new AgentOperationError("找不到目标任务。", 404);
-    const result = await dispatchAgentCommand(task.source_run_id, {
+    const run = await getAgentRunForExternalTask(request.params.id);
+    if (!run) throw new AgentOperationError("找不到目标任务。", 404);
+    const result = await dispatchAgentCommand(run.id, {
       type: "set_task_status",
       payload: { externalTaskId: request.params.id, status },
     });

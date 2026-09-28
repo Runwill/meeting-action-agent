@@ -1,9 +1,18 @@
 import { randomUUID } from "node:crypto";
 import type { AgentTask, ExternalTask } from "../agent-store.ts";
 import { readAgentStore, updateAgentStore } from "../agent-store.ts";
+import type { TaskConnector } from "./task-connector.ts";
 
-export const localTaskConnector = {
+export const localTaskConnector: TaskConnector = {
+  id: "local-task",
   name: "Local Task Hub",
+  capabilities: {
+    create: true,
+    read: true,
+    updateStatus: true,
+    updateFields: true,
+    statusValues: ["todo", "in_progress", "done"],
+  },
 
   async createTask(runId: string, task: AgentTask) {
     const idempotencyKey = `${runId}:${task.id}`;
@@ -13,6 +22,8 @@ export const localTaskConnector = {
       const now = new Date().toISOString();
       const created: ExternalTask = {
         id: `LTH-${randomUUID().slice(0, 8).toUpperCase()}`,
+        external_url: null,
+        connector_id: "local-task",
         idempotency_key: idempotencyKey,
         source_run_id: runId,
         source_task_id: task.id,
@@ -41,15 +52,21 @@ export const localTaskConnector = {
     return readAgentStore<ExternalTask | null>((store) => Object.hasOwn(store.tasks, id) ? store.tasks[id] : null);
   },
 
-  async listTasks(runId: string) {
-    return readAgentStore((store) => Object.values(store.tasks).filter((task) => task.source_run_id === runId));
-  },
-
   async updateStatus(id: string, status: ExternalTask["status"]) {
     return updateAgentStore((store) => {
       const task = Object.hasOwn(store.tasks, id) ? store.tasks[id] : null;
       if (!task) return null;
       task.status = status;
+      task.updated_at = new Date().toISOString();
+      return task;
+    });
+  },
+
+  async updateTask(id, changes) {
+    return updateAgentStore((store) => {
+      const task = Object.hasOwn(store.tasks, id) ? store.tasks[id] : null;
+      if (!task) return null;
+      Object.assign(task, changes);
       task.updated_at = new Date().toISOString();
       return task;
     });

@@ -23,6 +23,13 @@ function prettyJson(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
 
+function formatInteractionDuration(milliseconds: number | undefined) {
+  if (typeof milliseconds !== "number") return "";
+  if (milliseconds < 1000) return ` · ${Math.max(1, Math.round(milliseconds))}ms`;
+  if (milliseconds < 10_000) return ` · ${(milliseconds / 1000).toFixed(1)}s`;
+  return ` · ${Math.round(milliseconds / 1000)}s`;
+}
+
 export function RunInspector({ open, run, onClose }: RunInspectorProps) {
   const panelRef = useRef<HTMLElement>(null);
   const [activeTab, setActiveTab] = useState<InspectorTab>("input");
@@ -90,7 +97,7 @@ export function RunInspector({ open, run, onClose }: RunInspectorProps) {
           {activeTab === "dialogue" && <section aria-label="模型对话调用">
             {(run.model_interactions ?? []).length ? (run.model_interactions ?? []).map((interaction) => (
               <article className="inspector-interaction" key={interaction.id}>
-                <header><h3>对话判断 · {interaction.normalized_intent}</h3><time dateTime={interaction.at}>{new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(interaction.at))}</time></header>
+                <header><h3>对话判断 · {interaction.normalized_intent}{formatInteractionDuration(interaction.duration_ms)}</h3><time dateTime={interaction.at}>{new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(interaction.at))}</time></header>
                 <details><summary>系统提示词</summary><pre>{interaction.system_prompt}</pre></details>
                 <details><summary>模型输入</summary><pre>{interaction.user_prompt}</pre></details>
                 <details><summary>模型原始输出</summary><pre>{interaction.model_output}</pre></details>

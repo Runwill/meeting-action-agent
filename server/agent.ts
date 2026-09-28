@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { analyzeMeeting, isValidDateOnly, TaskSchema, type AnalysisInput, type AnalysisResult } from "./analyze.ts";
-import { localTaskConnector } from "./connectors/local-task.ts";
+import { getDefaultTaskConnectorId, getTaskConnector } from "./connectors/index.ts";
+import type { TaskConnector } from "./connectors/task-connector.ts";
+import { getFeishuConfig } from "./feishu-config.ts";
 import { getPromptSkillVersions, promptSkillMetadata } from "./prompt-skills.ts";
 import {
   getTeamContext,
@@ -86,7 +88,15 @@ function buildQuestions(tasks: AgentTask[]): AgentQuestion[] {
   for (const task of tasks) {
     if (!task.owner) questions.push(question({ task_id: task.id, field: "owner", prompt: `“${task.title}”由谁负责？`, input_type: "text" }));
     if (!task.due_date) questions.push(question({ task_id: task.id, field: "due_date", prompt: `“${task.title}”计划在什么日期前完成？`, input_type: "date" }));
-    if (task.confidence < 0.7) questions.push(question({ task_id: task.id, field: "confirm", prompt: `请确认“${task.title}”是否应创建为正式任务。`, input_type: "confirm" }));
+    const hasClearActionEvidence = Boolean(task.description.trim() && task.evidence.trim());
+    const onlyOwnerGap = !task.owner && !!task.due_date && hasClearActionEvidence;
+    if (task.confidence < 0.7 && !onlyOwnerGap) {
+      questions.push(question({ task_id: task.id, field: "confirm", prompt: `请确认“${task.title}”是否应创建为正式任务。`, input_type: "confirm" }));
+    }
+    const sourceText = [task.title, task.description, task.evidence, task.risk || ""].join("\n");
+    if (/(?:是否排入|是否纳入|是否加入|是否放入|可做可不做|可选)/.test(sourceText)) {
+      questions.push(question({ task_id: task.id, field: "confirm", prompt: `请确认“${task.title}”是否纳入本次任务计划。`, input_type: "confirm" }));
+    }
     if (task.priority_conflict) {
       questions.push(question({ task_id: task.id, field: "priority", prompt: `“${task.title}”命中了冲突的优先级规则，请选择最终优先级。`, input_type: "priority" }));
     } else if (task.priority === "high" && !task.priority_evidence) {
@@ -158,6 +168,7 @@ export async function createAgentRun(input: AnalysisInput, dependencies: AgentDe
     : `我已识别 ${analysis.tasks.length} 个行动项，信息完整，可以进入审批。`;
   const run: AgentRun = {
     id: randomUUID(),
+    connector_id: getDefaultTaskConnectorId(),
     state: questions.length ? "clarifying" : "awaiting_approval",
     analysis,
     questions,
@@ -197,6 +208,12 @@ export async function createAgentRun(input: AnalysisInput, dependencies: AgentDe
 
 export async function getAgentRun(id: string) {
   return readAgentStore((store) => Object.hasOwn(store.runs, id) ? store.runs[id] : null);
+}
+
+export async function getAgentRunForExternalTask(externalTaskId: string) {
+  return readAgentStore((store) => Object.values(store.runs).find((run) => (
+    run.created_tasks.some((record) => record.external_id === externalTaskId)
+  )) || null);
 }
 
 const CONFIRM_YES = new Set(["yes", "y", "true", "是", "确认", "是任务", "保留"]);
@@ -403,7 +420,9 @@ function verifyTask(runId: string, source: AgentTask, actual: ExternalTask | nul
   if (actual.priority !== source.priority) issues.push("优先级不一致");
   if (actual.priority_reason !== source.priority_reason) issues.push("优先级理由不一致");
   if (actual.priority_evidence !== source.priority_evidence) issues.push("优先级证据不一致");
-  if (actual.status !== source.status) issues.push("状态不一致");
+  const statusMatches = actual.status === source.status
+    || (actual.connector_id === "feishu" && source.status === "todo" && actual.status === "in_progress");
+  if (!statusMatches) issues.push("状态不一致");
   if (actual.evidence !== source.evidence) issues.push("原文证据不一致");
   if (JSON.stringify(actual.dependencies) !== JSON.stringify(source.dependencies)) issues.push("依赖关系不一致");
   if (actual.risk !== source.risk) issues.push("风险字段不一致");
@@ -414,10 +433,21 @@ function approvalSignature(tasks: AgentTask[]) {
   return createHash("sha256").update(JSON.stringify([...tasks].sort((a, b) => a.id.localeCompare(b.id)))).digest("hex");
 }
 
-function recordCreatedTask(source: AgentTask, actual: ExternalTask, reused: boolean, issues: string[]): CreatedTaskRecord {
+function connectorSoftIssues(task: (ExternalTask & { issues?: string[] }) | null | undefined) {
+  return Array.isArray(task?.issues) ? task.issues.filter((issue) => typeof issue === "string" && issue.trim()) : [];
+}
+
+function uniqueIssues(issues: string[]) {
+  return [...new Set(issues.filter((issue) => issue.trim()))];
+}
+
+function recordCreatedTask(source: AgentTask, actual: ExternalTask, connector: TaskConnector, reused: boolean, verificationIssues: string[], softIssues: string[] = []): CreatedTaskRecord {
   return {
     task_id: source.id,
     external_id: actual.id,
+    external_url: actual.external_url ?? null,
+    connector_id: connector.id,
+    connector_name: connector.name,
     title: actual.title,
     description: actual.description,
     owner: actual.owner,
@@ -430,9 +460,42 @@ function recordCreatedTask(source: AgentTask, actual: ExternalTask, reused: bool
     dependencies: actual.dependencies,
     risk: actual.risk,
     reused,
-    verified: issues.length === 0,
-    issues,
+    verified: verificationIssues.length === 0,
+    issues: uniqueIssues([...verificationIssues, ...softIssues]),
   };
+}
+
+function connectorFailureMessage(error: unknown) {
+  if (error instanceof AgentOperationError) return error.message;
+  if (error && typeof error === "object" && "name" in error && (error as { name?: unknown }).name === "FeishuConnectorError") {
+    const message = error instanceof Error ? error.message.trim() : "";
+    return message || "飞书任务创建失败，请检查应用权限和连接配置。";
+  }
+  return "任务创建失败；已保留成功步骤，可按幂等键安全恢复。";
+}
+
+function connectorOperationError(error: unknown, fallback: string) {
+  if (error instanceof AgentOperationError) return error;
+  if (error && typeof error === "object" && "name" in error && (error as { name?: unknown }).name === "FeishuConnectorError") {
+    const code = "code" in error ? (error as { code?: unknown }).code : undefined;
+    const message = error instanceof Error && error.message.trim() ? error.message.trim() : fallback;
+    return new AgentOperationError(message, code === "unsupported" || code === "owner_mapping_missing" ? 409 : 502);
+  }
+  return new AgentOperationError(fallback, 502);
+}
+
+function assertExternalApprovalReady(connectorId: AgentRun["connector_id"], tasks: AgentTask[]) {
+  if (connectorId !== "feishu") return;
+  const ownerMap = getFeishuConfig()?.ownerMap ?? {};
+  const missingOwners = [...new Set(tasks
+    .map((task) => task.owner?.trim())
+    .filter((owner): owner is string => !!owner && !ownerMap[owner]))];
+  if (missingOwners.length) {
+    throw new AgentOperationError(
+      `飞书写入前需要先绑定负责人：${missingOwners.join("、")}。请在“平台连接”里让对应成员完成飞书身份绑定，或取消勾选这些任务后再批准。`,
+      422,
+    );
+  }
 }
 
 export async function approveAndExecute(id: string, payload: z.infer<typeof ApprovalPayloadSchema>) {
@@ -475,6 +538,7 @@ export async function approveAndExecute(id: string, payload: z.infer<typeof Appr
         throw new AgentOperationError("失败运行只能使用原审批内容和原任务 ID 重试。", 409);
       }
       const retryTasks = run.analysis.tasks.filter((task) => approvedIds.has(task.id));
+      assertExternalApprovalReady(run.connector_id, retryTasks);
       run.state = "executing";
       run.updated_at = new Date().toISOString();
       run.events.push(event("approval", `用户重试执行 ${retryTasks.length} 个原审批任务；已有目标任务将按幂等键复用。`, { retry: true }, { actor: "user", source: "quick_action", action: "retry_approval", entity_type: "run", entity_id: id }));
@@ -483,6 +547,7 @@ export async function approveAndExecute(id: string, payload: z.infer<typeof Appr
     }
     if (run.state !== "awaiting_approval") throw new AgentOperationError("当前状态不能执行任务创建。", 409);
     if (run.questions.length) throw new AgentOperationError("仍有未解决的澄清问题，不能执行任务创建。", 409);
+    assertExternalApprovalReady(run.connector_id, approvedTasks);
 
     run.analysis.tasks = run.analysis.tasks.map((task) => incoming.get(task.id)!);
     run.approved_task_ids = approvedTasks.map((task) => task.id);
@@ -495,18 +560,19 @@ export async function approveAndExecute(id: string, payload: z.infer<typeof Appr
   });
 
   if (!claim.execute) return claim.run;
+  const connector = getTaskConnector(claim.run.connector_id);
 
   try {
     for (const task of claim.tasks) {
       await updateAgentStore((store) => {
-        store.runs[id].events.push(event("tool_call", `调用 ${localTaskConnector.name} 创建“${task.title}”。`, undefined, { actor: "agent", source: "runtime", action: "create_task", entity_type: "task", entity_id: task.id }));
+        store.runs[id].events.push(event("tool_call", `调用 ${connector.name} 创建“${task.title}”。`, undefined, { actor: "agent", source: "runtime", action: "create_task", entity_type: "task", entity_id: task.id }));
         store.runs[id].updated_at = new Date().toISOString();
         return true;
       });
-      const creation = await localTaskConnector.createTask(id, task);
-      const actual = await localTaskConnector.getTask(creation.task.id);
+      const creation = await connector.createTask(id, task);
+      const actual = await connector.getTask(creation.task.id);
       const issues = verifyTask(id, task, actual);
-      const record = recordCreatedTask(task, actual || creation.task, creation.reused, issues);
+      const record = recordCreatedTask(task, actual || creation.task, connector, creation.reused, issues, creation.issues || []);
       await updateAgentStore((store) => {
         const run = store.runs[id];
         run.created_tasks = [...run.created_tasks.filter((item) => item.task_id !== task.id), record];
@@ -520,13 +586,14 @@ export async function approveAndExecute(id: string, payload: z.infer<typeof Appr
         return true;
       });
     }
-  } catch {
+  } catch (error) {
+    const message = connectorFailureMessage(error);
     return updateAgentStore((store) => {
       const run = store.runs[id];
       run.state = "failed";
       run.updated_at = new Date().toISOString();
-      run.events.push(event("error", "任务创建失败；已保留成功步骤，可按幂等键安全恢复。", undefined, { actor: "agent", source: "runtime", action: "create_task_failed", entity_type: "run", entity_id: id }));
-      run.conversation.push(conversationTurn("assistant", "agent_report", "任务创建没有全部完成。已保留成功步骤，可以安全重试，不会重复创建。", { action: "create_task_failed" }));
+      run.events.push(event("error", message, undefined, { actor: "agent", source: "runtime", action: "create_task_failed", entity_type: "run", entity_id: id }));
+      run.conversation.push(conversationTurn("assistant", "agent_report", `${message} 已保留成功步骤，可以安全重试，不会重复创建。`, { action: "create_task_failed" }));
       return run;
     });
   }
@@ -589,7 +656,9 @@ async function refreshTrackingInternal(id: string, allowVerification: boolean, r
   const allowedStates: AgentRun["state"][] = allowVerification ? ["verifying", "tracking", "completed"] : ["tracking", "completed"];
   if (!allowedStates.includes(current.state)) throw new AgentOperationError("当前状态不能刷新任务追踪。", 409);
 
-  const tasks = await localTaskConnector.listTasks(id);
+  const connector = getTaskConnector(current.connector_id);
+  const readbacks = await Promise.all(current.created_tasks.map((record) => connector.getTask(record.external_id)));
+  const tasks = readbacks.filter((task): task is ExternalTask => task !== null);
   const approvedIds = new Set(current.approved_task_ids);
   const createdIds = new Set(current.created_tasks.filter((record) => record.verified).map((record) => record.task_id));
   const taskIds = new Set(tasks.map((task) => task.source_task_id));
@@ -634,6 +703,7 @@ async function refreshTrackingInternal(id: string, allowVerification: boolean, r
     run.created_tasks = run.created_tasks.map((record) => ({
       ...record,
       status: tasks.find((task) => task.id === record.external_id)?.status || record.status,
+      external_url: tasks.find((task) => task.id === record.external_id)?.external_url ?? record.external_url ?? null,
     }));
     run.overdue_task_ids = [...overdueIds];
     run.updated_at = new Date().toISOString();
@@ -690,18 +760,33 @@ export async function refreshTracking(id: string, source: "manual" | "chat" = "m
 }
 
 export async function updateExternalTaskStatus(id: string, status: "todo" | "in_progress" | "done", source: "quick_action" | "chat" = "quick_action") {
-  const existing = await localTaskConnector.getTask(id);
-  if (!existing) throw new AgentOperationError("找不到目标任务。", 404);
-  const run = await getAgentRun(existing.source_run_id);
+  const run = await getAgentRunForExternalTask(id);
   if (!run || run.state !== "tracking" || !run.created_tasks.some((record) => record.external_id === id && record.verified)) {
     throw new AgentOperationError("该任务不属于可追踪的已批准运行。", 409);
   }
+  const connector = getTaskConnector(run.connector_id);
+  if (!connector.capabilities.updateStatus) {
+    throw new AgentOperationError(`${connector.name} 当前不支持同步任务状态。`, 409);
+  }
+  if (connector.capabilities.statusValues?.length && !connector.capabilities.statusValues.includes(status)) {
+    throw new AgentOperationError(`${connector.name} 不能同步为${taskStatusLabel(status)}；请选择该平台支持的状态。`, 409);
+  }
+  const existing = await connector.getTask(id);
+  if (!existing || existing.source_run_id !== run.id) throw new AgentOperationError("找不到目标任务。", 404);
   if (existing.status === status) return existing;
-  const task = await localTaskConnector.updateStatus(id, status);
+  let task: (ExternalTask & { issues?: string[] }) | null;
+  try {
+    task = await connector.updateStatus(id, status);
+  } catch (error) {
+    throw connectorOperationError(error, "任务状态没有同步到目标平台。");
+  }
   if (!task) throw new AgentOperationError("找不到目标任务。", 404);
+  const operationIssues = connectorSoftIssues(task);
   await updateAgentStore((store) => {
     const current = store.runs[existing.source_run_id];
     if (!current || current.state !== "tracking") throw new AgentOperationError("运行状态已改变，请刷新后重试。", 409);
+    const record = current.created_tasks.find((item) => item.external_id === id);
+    if (record && operationIssues.length) record.issues = uniqueIssues([...record.issues, ...operationIssues]);
     current.events.push(event(
       "status_change",
       `用户将任务“${task.title}”从${taskStatusLabel(existing.status)}改为${taskStatusLabel(status)}。`,
@@ -717,9 +802,9 @@ export async function updateExternalTaskStatus(id: string, status: "todo" | "in_
     current.updated_at = new Date().toISOString();
     return true;
   });
-  const refreshed = await refreshTrackingInternal(existing.source_run_id, false, "status_change");
+  const refreshed = await refreshTrackingInternal(run.id, false, "status_change");
   await updateAgentStore((store) => {
-    const current = store.runs[existing.source_run_id];
+    const current = store.runs[run.id];
     current.conversation.push(conversationTurn(
       "assistant",
       "agent_report",
@@ -735,6 +820,20 @@ export async function updateExternalTaskStatus(id: string, status: "todo" | "in_
 }
 
 export async function confirmTaskFieldEdit(runId: string, actionId: string) {
+  const snapshot = await getAgentRun(runId);
+  const snapshotPending = snapshot?.pending_action;
+  if (!snapshot || !snapshotPending || snapshotPending.type !== "edit_task" || snapshotPending.id !== actionId) {
+    throw new AgentOperationError("待确认操作已失效，请重新发起。", 409);
+  }
+  const trackingEdit = snapshotPending.external_task_id !== null;
+  const connector = trackingEdit ? getTaskConnector(snapshot.connector_id) : null;
+  if (connector && (!connector.capabilities.updateFields || !connector.updateTask)) {
+    throw new AgentOperationError(`${connector.name} 当前不支持修改任务字段。`, 409);
+  }
+  const externalBefore = trackingEdit && snapshotPending.external_task_id
+    ? await connector!.getTask(snapshotPending.external_task_id)
+    : null;
+
   const result = await updateAgentStore((store) => {
     const run = Object.hasOwn(store.runs, runId) ? store.runs[runId] : null;
     const pending = run?.pending_action;
@@ -762,72 +861,106 @@ export async function confirmTaskFieldEdit(runId: string, actionId: string) {
         priority_conflict: false,
       } : {}),
     });
-    let external: ExternalTask | null = null;
     if (tracking) {
       const record = run.created_tasks.find((item) => item.task_id === task.id && item.external_id === pending.external_task_id && item.verified);
-      external = Object.hasOwn(store.tasks, pending.external_task_id!) ? store.tasks[pending.external_task_id!] : null;
-      if (!record || !external || external.source_run_id !== runId || external.source_task_id !== task.id
-        || external.status !== record.status
-        || fields.some((field) => external![field] !== pending.expected[field])) {
+      if (!record || !externalBefore || externalBefore.connector_id !== run.connector_id
+        || externalBefore.source_run_id !== runId || externalBefore.source_task_id !== task.id
+        || externalBefore.status !== record.status
+        || fields.some((field) => externalBefore[field] !== pending.expected[field])) {
         throw new AgentOperationError("目标任务已变化或未通过验证，请重新发起修改。", 409);
       }
-      Object.assign(external, changes);
-      if (changes.priority) {
-        external.priority_reason = updated.priority_reason;
-        external.priority_evidence = null;
-      }
-      external.updated_at = new Date().toISOString();
-      Object.assign(record, changes);
-      if (changes.priority) {
-        record.priority_reason = updated.priority_reason;
-        record.priority_evidence = null;
-      }
     }
-    run.analysis.tasks[index] = updated;
     run.pending_action = null;
     const before = Object.fromEntries(fields.map((field) => [field, pending.expected[field] ?? null]));
     const after = Object.fromEntries(fields.map((field) => [field, updated[field] ?? null]));
     const labels: Record<keyof TaskFieldChanges, string> = { title: "标题", description: "描述", owner: "负责人", due_date: "截止日期", priority: "优先级" };
     const fieldNames = fields.map((field) => labels[field]).join("、");
-    run.events.push(event("task_edit", `用户修改了任务“${updated.title}”的${fieldNames}。`, {
-      fields: fields.join(","), external_id: pending.external_task_id,
-    }, { actor: "user", source: "chat", action: "edit_task", entity_type: "task", entity_id: pending.external_task_id || task.id, before, after }));
     run.conversation.push(conversationTurn("user", "message", "确认执行此任务字段修改。", { action: "confirm_action", task_id: task.id }));
-    if (!tracking) run.conversation.push(conversationTurn("assistant", "agent_report", `已更新“${updated.title}”的${fieldNames}；创建任务仍须单独审批。`, { action: "edit_task", task_id: task.id }));
+    if (!tracking) {
+      run.analysis.tasks[index] = updated;
+      run.events.push(event("task_edit", `用户修改了任务“${updated.title}”的${fieldNames}。`, {
+        fields: fields.join(","), external_id: null,
+      }, { actor: "user", source: "chat", action: "edit_task", entity_type: "task", entity_id: task.id, before, after }));
+      run.conversation.push(conversationTurn("assistant", "agent_report", `已更新“${updated.title}”的${fieldNames}；创建任务仍须单独审批。`, { action: "edit_task", task_id: task.id }));
+    }
     run.updated_at = new Date().toISOString();
     return {
       tracking, run, externalId: pending.external_task_id, changes, fieldNames, title: updated.title, taskId: task.id,
-      priorityReason: updated.priority_reason, priorityEvidence: updated.priority_evidence,
+      updated, expected: pending.expected, before, after, softIssues: [] as string[],
     };
   });
   if (!result.tracking) return result.run;
-  // Local Task Hub shares this store; read back through the connector boundary before refreshing tracking.
-  const readback = result.externalId ? await localTaskConnector.getTask(result.externalId) : null;
+
+  const failTrackingEdit = (message: string, issue: string, action: string) => updateAgentStore((store) => {
+    const run = store.runs[runId];
+    run.state = "failed";
+    const record = run.created_tasks.find((item) => item.external_id === result.externalId);
+    if (record) {
+      record.verified = false;
+      if (!record.issues.includes(issue)) record.issues.push(issue);
+    }
+    run.events.push(event("error", message, undefined, {
+      actor: "agent", source: "runtime", action, entity_type: "task", entity_id: result.externalId || undefined,
+    }));
+    run.conversation.push(conversationTurn("assistant", "agent_report", message, { action }));
+    run.updated_at = new Date().toISOString();
+    return run;
+  });
+
+  const externalChanges = {
+    ...result.changes,
+    ...(result.changes.priority ? {
+      priority_reason: result.updated.priority_reason,
+      priority_evidence: result.updated.priority_evidence,
+    } : {}),
+  };
+  try {
+    const changed = result.externalId ? await connector!.updateTask!(result.externalId, externalChanges) : null;
+    if (!changed) return failTrackingEdit("任务字段修改未完成，已暂停追踪。", "目标平台未完成字段修改", "task_edit_failed");
+    result.softIssues = connectorSoftIssues(changed);
+  } catch (error) {
+    const message = connectorOperationError(error, "任务字段修改未完成，已暂停追踪。").message;
+    return failTrackingEdit(message, "目标平台字段修改失败", "task_edit_failed");
+  }
+
+  const readback = result.externalId ? await connector!.getTask(result.externalId) : null;
   if (!readback || readback.source_run_id !== runId || readback.source_task_id !== result.taskId
     || Object.entries(result.changes).some(([field, value]) => readback[field as keyof TaskFieldChanges] !== value)
-    || (result.changes.priority && (readback.priority_reason !== result.priorityReason || readback.priority_evidence !== result.priorityEvidence))) {
-    return updateAgentStore((store) => {
-      const run = store.runs[runId];
-      run.state = "failed";
-      const record = run.created_tasks.find((item) => item.external_id === result.externalId);
-      if (record) {
-        record.verified = false;
-        record.issues.push("修改后的字段回读不一致");
-      }
-      run.events.push(event("error", "任务字段修改后的回读验证失败，已暂停追踪。", undefined, {
-        actor: "agent", source: "runtime", action: "task_edit_verification_failed", entity_type: "task", entity_id: result.externalId || undefined,
-      }));
-      run.conversation.push(conversationTurn("assistant", "agent_report", "任务字段修改后的回读验证失败，已暂停追踪。", { action: "task_edit_verification_failed" }));
-      run.updated_at = new Date().toISOString();
-      return run;
-    });
+    || (result.changes.priority && (readback.priority_reason !== result.updated.priority_reason || readback.priority_evidence !== result.updated.priority_evidence))) {
+    return failTrackingEdit("任务字段修改后的回读验证失败，已暂停追踪。", "修改后的字段回读不一致", "task_edit_verification_failed");
   }
   await updateAgentStore((store) => {
     const run = store.runs[runId];
+    const index = run.analysis.tasks.findIndex((item) => item.id === result.taskId);
+    const record = run.created_tasks.find((item) => item.external_id === result.externalId && item.task_id === result.taskId);
+    if (run.state !== "tracking" || index < 0 || !record
+      || Object.entries(result.expected).some(([field, value]) => run.analysis.tasks[index][field as keyof TaskFieldChanges] !== value)) {
+      throw new AgentOperationError("运行状态或任务字段已改变，请刷新后检查目标平台。", 409);
+    }
+    run.analysis.tasks[index] = result.updated;
+    Object.assign(record, {
+      title: readback.title,
+      description: readback.description,
+      owner: readback.owner,
+      due_date: readback.due_date,
+      priority: readback.priority,
+      priority_reason: readback.priority_reason,
+      priority_evidence: readback.priority_evidence,
+      status: readback.status,
+      external_url: readback.external_url ?? record.external_url ?? null,
+      evidence: readback.evidence,
+      dependencies: readback.dependencies,
+      risk: readback.risk,
+      verified: true,
+      issues: uniqueIssues([...record.issues, ...result.softIssues]),
+    });
+    run.events.push(event("task_edit", `用户修改了任务“${result.updated.title}”的${result.fieldNames}。`, {
+      fields: Object.keys(result.changes).join(","), external_id: readback.id,
+    }, { actor: "user", source: "chat", action: "edit_task", entity_type: "task", entity_id: readback.id, before: result.before, after: result.after }));
     run.events.push(event("verification", `任务“${result.title}”的字段修改已从 ${readback.id} 回读验证。`, {
       external_id: readback.id, fields: Object.keys(result.changes).join(","),
     }, { actor: "agent", source: "runtime", action: "verify_task_edit", entity_type: "task", entity_id: readback.id }));
-    run.conversation.push(conversationTurn("assistant", "agent_report", `已更新“${result.title}”的${result.fieldNames}，本地任务回读一致。`, {
+    run.conversation.push(conversationTurn("assistant", "agent_report", `已更新“${result.title}”的${result.fieldNames}，并从 ${connector!.name} 回读确认。`, {
       action: "edit_task", task_id: result.taskId,
     }));
     run.updated_at = new Date().toISOString();

@@ -12,7 +12,7 @@ const stages = [
   { key: "analyzing", label: "分析", hint: "识别行动项", events: ["analysis"] },
   { key: "clarifying", label: "澄清", hint: "补齐关键信息", events: ["question", "answer"] },
   { key: "awaiting_approval", label: "审批", hint: "确认创建范围", events: ["plan", "approval"] },
-  { key: "executing", label: "执行", hint: "写入任务中心", events: ["tool_call", "tool_result"] },
+  { key: "executing", label: "执行", hint: "写入目标平台", events: ["tool_call", "tool_result"] },
   { key: "verifying", label: "验证", hint: "回读字段结果", events: ["verification"] },
   { key: "tracking", label: "追踪", hint: "刷新完成状态", events: ["tracking"] },
 ] as const;

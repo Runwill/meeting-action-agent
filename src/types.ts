@@ -48,6 +48,93 @@ export interface ModelConfigStatus {
   apiKeyPreview: string | null;
 }
 
+export interface FeishuLinkedUser {
+  id: string;
+  name: string;
+  aliases: string[];
+  hasOpenId: boolean;
+  emailPreview: string | null;
+  linkedAt: string;
+  updatedAt: string;
+}
+
+export interface FeishuIntegrationStatus {
+  configured: boolean;
+  enabled: boolean;
+  oauthEnabled: boolean;
+  redirectUri: string | null;
+  appConsoleUrl: string | null;
+  appPermissionUrl: string | null;
+  mappedOwnerNames: string[];
+  advancedSettingsSource: "persistent" | "environment" | "none";
+  tasklistGuid: string | null;
+  tasklistSectionGuid: string | null;
+  tasklistConfigured: boolean;
+  tasklistSectionConfigured: boolean;
+  dueReminderMinutes: number[];
+  dueReminderCount: number;
+  originUrlConfigured: boolean;
+  syncComments: boolean;
+  tasklistDiscoveryReady: boolean;
+  linkedUsers: FeishuLinkedUser[];
+}
+
+export interface FeishuTasklistSectionOption {
+  id: string;
+  name: string;
+}
+
+export interface FeishuTasklistOption {
+  id: string;
+  name: string;
+  url: string | null;
+  sections: FeishuTasklistSectionOption[];
+}
+
+export interface FeishuTasklistSearchResult {
+  query: string;
+  tokenUserName: string;
+  items: FeishuTasklistOption[];
+}
+
+export interface TaskConnectorCapabilities {
+  create: boolean;
+  read: boolean;
+  updateStatus: boolean;
+  updateFields: boolean;
+  statusValues?: TaskStatus[];
+  tasklists?: boolean;
+  reminders?: boolean;
+  comments?: boolean;
+  origin?: boolean;
+}
+
+export interface TaskConnectorInfo {
+  id: "local-task" | "feishu";
+  name: string;
+  capabilities: TaskConnectorCapabilities;
+}
+
+export interface ConnectorsStatus {
+  connectors: TaskConnectorInfo[];
+  feishu: {
+    configured: boolean;
+    enabled: boolean;
+    baseURL: string | null;
+    userIdType: "open_id" | "union_id" | "user_id" | null;
+    ownerCount: number;
+    advancedSettingsSource: "persistent" | "environment" | "none";
+    tasklistGuid: string | null;
+    tasklistSectionGuid: string | null;
+    tasklistConfigured: boolean;
+    tasklistSectionConfigured: boolean;
+    dueReminderMinutes: number[];
+    dueReminderCount: number;
+    originUrlConfigured: boolean;
+    syncComments: boolean;
+  };
+}
+
 export type AgentQuestionField = "owner" | "due_date" | "confirm" | "general" | "priority";
 export type AgentQuestionInputType = "text" | "date" | "confirm" | "priority" | "select";
 
@@ -117,6 +204,23 @@ export interface ConversationTurn {
 }
 
 export type TaskFieldChanges = Partial<Pick<ActionTask, "title" | "description" | "owner" | "due_date" | "priority">>;
+export type FeishuSettingsChangeSet = Partial<{
+  tasklistGuid: string | null;
+  tasklistSectionGuid: string | null;
+  dueReminderMinutes: number[];
+  syncComments: boolean;
+}>;
+
+export type QueuedAgentPlan = {
+  intent: "propose_status" | "propose_task_edit" | "propose_task_reminders" | "propose_task_comment" | "explain" | "unsure";
+  external_task_id: string | null;
+  status: TaskStatus | null;
+  task_id: string | null;
+  field_changes: TaskFieldChanges;
+  due_reminder_minutes: number[];
+  comment: string;
+  reply: string;
+};
 
 export type PendingAgentAction = {
   id: string;
@@ -133,6 +237,29 @@ export type PendingAgentAction = {
   changes: TaskFieldChanges;
   expected: TaskFieldChanges;
   created_at: string;
+} | {
+  id: string;
+  type: "update_feishu_settings";
+  changes: FeishuSettingsChangeSet;
+  expected: FeishuSettingsChangeSet;
+  queued_message?: string;
+  queued_summary?: string;
+  queued_plan?: QueuedAgentPlan;
+  created_at: string;
+} | {
+  id: string;
+  type: "sync_task_reminders";
+  task_id: string;
+  external_task_id: string;
+  dueReminderMinutes: number[];
+  created_at: string;
+} | {
+  id: string;
+  type: "add_task_comment";
+  task_id: string;
+  external_task_id: string;
+  comment: string;
+  created_at: string;
 };
 
 export interface ModelInteraction {
@@ -143,6 +270,7 @@ export interface ModelInteraction {
   user_prompt: string;
   model_output: string;
   normalized_intent: string;
+  duration_ms?: number;
 }
 
 export type ClarificationOutcome =
@@ -167,6 +295,9 @@ export interface ClarificationHistoryEntry {
 export interface CreatedTaskRecord {
   task_id: string;
   external_id: string;
+  external_url?: string | null;
+  connector_id: "local-task" | "feishu";
+  connector_name: string;
   title: string;
   description: string;
   owner: string | null;
@@ -205,6 +336,7 @@ export type PromptSkillName =
 
 export interface AgentRun {
   id: string;
+  connector_id: "local-task" | "feishu";
   state: AgentState;
   analysis: MeetingResult;
   questions: AgentQuestion[];

@@ -1,4 +1,4 @@
-import type { ActionTask, AgentRun, TaskStatus, UserSkill } from "./types";
+import type { ActionTask, AgentRun, ConnectorsStatus, FeishuIntegrationStatus, FeishuTasklistSearchResult, TaskStatus, UserSkill } from "./types";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -166,5 +166,46 @@ export function saveUserSkills(input: { skills: UserSkill[] }) {
   return requestJson<{ skills: UserSkill[] }>("/api/user-skills", {
     method: "PUT",
     ...jsonBody(input),
+  });
+}
+
+export function getFeishuIntegrationStatus() {
+  return requestJson<FeishuIntegrationStatus>("/api/integrations/feishu/status");
+}
+
+export function getConnectors() {
+  return requestJson<ConnectorsStatus>("/api/connectors");
+}
+
+export function startFeishuOAuth(alias?: string) {
+  const returnUrl = typeof window === "undefined" ? undefined : `${window.location.origin}/#workflow`;
+  return requestJson<{ authorizeUrl: string; redirectUri: string; returnUrl: string }>("/api/integrations/feishu/oauth/start", {
+    method: "POST",
+    ...jsonBody({ alias, returnUrl }),
+  });
+}
+
+export function markFeishuRedirectVerified() {
+  return requestJson<FeishuIntegrationStatus>("/api/integrations/feishu/oauth/redirect-verified", {
+    method: "POST",
+  });
+}
+
+export function saveFeishuSettings(input: {
+  tasklistGuid: string | null;
+  tasklistSectionGuid: string | null;
+  dueReminderMinutes: string | number[];
+  syncComments: boolean;
+}) {
+  return requestJson<FeishuIntegrationStatus>("/api/integrations/feishu/settings", {
+    method: "PUT",
+    ...jsonBody(input),
+  });
+}
+
+export function searchFeishuTasklists(query: string) {
+  return requestJson<FeishuTasklistSearchResult>("/api/integrations/feishu/tasklists/search", {
+    method: "POST",
+    ...jsonBody({ query }),
   });
 }

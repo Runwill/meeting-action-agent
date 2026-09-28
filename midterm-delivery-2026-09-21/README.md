@@ -5,6 +5,7 @@
 ## 文件说明
 
 - `MIDTERM_REPORT.md`：中期报告技术正文，可按学校模板调整。
+- `MIDTERM_PROCESS_RETROSPECTIVE.html`：中期制作过程复盘，区分已修正问题、持续挑战和不能越界的验收结论，可直接在浏览器中打开。
 - `PPT_MATERIALS.md`：汇报短文案、9 页叙事、对话能力矩阵和后期目标。
 - `FUNCTION_GROUPS.md`：按功能场景组织截图，避免把同一功能的状态变化误当成多个亮点。
 - `TEST_EVIDENCE.md`：验收记录、测试边界和证据口径。

@@ -4,6 +4,7 @@ import type { AgentEvent } from "../types";
 type ExecutionLogProps = {
   events: AgentEvent[];
   live?: boolean;
+  connectorName?: string;
 };
 
 function EventIcon({ type }: { type: AgentEvent["type"] }) {
@@ -42,7 +43,7 @@ function ChangeSummary({ event }: { event: AgentEvent }) {
   return <span className="event-change"><b>{statusText[before] ?? before}</b><i>→</i><b>{statusText[after] ?? after}</b></span>;
 }
 
-export function ExecutionLog({ events, live = false }: ExecutionLogProps) {
+export function ExecutionLog({ events, live = false, connectorName = "任务平台" }: ExecutionLogProps) {
   const items = [...events].reverse();
   const recent = items.slice(0, 6);
   const older = items.slice(6);
@@ -73,7 +74,7 @@ export function ExecutionLog({ events, live = false }: ExecutionLogProps) {
       </header>
       <ol role="log" aria-live={live ? "polite" : "off"}>
         {recent.map(renderItem)}
-        {live && <li className="is-pending"><span className="event-icon" aria-hidden="true"><i className="loader" /></span><div><p>等待本地任务中心返回结果…</p></div></li>}
+        {live && <li className="is-pending"><span className="event-icon" aria-hidden="true"><i className="loader" /></span><div><p>等待{connectorName}返回结果…</p></div></li>}
       </ol>
       {older.length > 0 && <details className="older-events"><summary>查看更早的 {older.length} 条记录</summary><ol>{older.map(renderItem)}</ol></details>}
     </section>

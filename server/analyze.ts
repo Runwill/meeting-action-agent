@@ -116,6 +116,7 @@ type AnalysisDependencies = {
 
 const HIGH_PRIORITY_SIGNAL = /紧急|最高|P0|P1|务必|阻塞|立即|尽快/i;
 const LOW_PRIORITY_SIGNAL = /可选|有空|后续优化|P3/i;
+const UNRESOLVED_DUE_SIGNAL = /哪天交|什么时候交|交付日期.*(?:未定|没定|确认)|截止日期.*(?:未定|没定|确认)|具体.*(?:时间|日期).*确认|时间之后确认|时间.*之后确认|今天好像还没定|还没定|尚未确定|之后确认|会后再定|别拖太久/;
 
 /**
  * Models can miss a contradiction even when both signals are present in the
@@ -125,6 +126,25 @@ const LOW_PRIORITY_SIGNAL = /可选|有空|后续优化|P3/i;
 function hasSourcePriorityConflict(task: z.infer<typeof TaskSchema>) {
   const sourceText = [task.evidence, task.title, task.description].join("\n");
   return HIGH_PRIORITY_SIGNAL.test(sourceText) && LOW_PRIORITY_SIGNAL.test(sourceText);
+}
+
+function normalizeMissingDueDate(task: z.infer<typeof TaskSchema>, meetingDate: string | undefined) {
+  if (task.due_date || !meetingDate) return task;
+  const sourceText = [task.evidence, task.title, task.description].join("\n");
+  if (UNRESOLVED_DUE_SIGNAL.test(sourceText)) return task;
+  const dueDate = relativeDate(sourceText, meetingDate);
+  return dueDate ? { ...task, due_date: dueDate } : task;
+}
+
+function normalizeUnresolvedDueDate(task: z.infer<typeof TaskSchema>) {
+  if (!task.due_date) return task;
+  const sourceText = [task.evidence, task.title, task.description].join("\n");
+  const hasExplicitDate = normalizeAbsoluteDate(sourceText)
+    || /(?<!\d)(\d{1,2})\s*月\s*(\d{1,2})\s*日/.test(sourceText)
+    || /(?<!\d)\d{1,2}\s*(?:号|日)(?:前|之前)?/.test(sourceText)
+    || /(?:明天|明日|后天|本周|这周|下周|周[一二三四五六日天])/.test(sourceText);
+  const unresolvedSignal = UNRESOLVED_DUE_SIGNAL.test(sourceText);
+  return unresolvedSignal && !hasExplicitDate ? { ...task, due_date: null } : task;
 }
 
 export class AnalysisServiceError extends Error {
@@ -191,7 +211,8 @@ export async function analyzeMeeting(input: AnalysisInput, dependencies: Analysi
       userPrompt,
     });
     const parsed = MeetingSchema.parse(JSON.parse(content));
-    const normalizedTasks = parsed.tasks.map((task) => {
+    const normalizedTasks = parsed.tasks.map((rawTask) => {
+      const task = normalizeMissingDueDate(normalizeUnresolvedDueDate(rawTask), input.meetingDate);
       if (!hasSourcePriorityConflict(task)) return task;
       return {
         ...task,
@@ -268,6 +289,10 @@ function relativeDate(text: string, meetingDate: string | undefined) {
     const day = "一二三四五六日".indexOf(text.match(/下周([一二三四五六日天])/)![1].replace("天", "日")) + 1;
     const daysUntilNextMonday = date.getUTCDay() === 0 ? 1 : 8 - date.getUTCDay();
     date.setUTCDate(date.getUTCDate() + daysUntilNextMonday + day - 1);
+  } else if (/(?<!下)周([一二三四五六日天])/.test(text)) {
+    const day = "一二三四五六日".indexOf(text.match(/(?<!下)周([一二三四五六日天])/)![1].replace("天", "日")) + 1;
+    const currentDay = date.getUTCDay() === 0 ? 7 : date.getUTCDay();
+    date.setUTCDate(date.getUTCDate() + ((day - currentDay + 7) % 7 || (currentDay === 7 ? 7 : 0)));
   } else return null;
   return date.toISOString().slice(0, 10);
 }

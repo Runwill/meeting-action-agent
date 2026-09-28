@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -24,24 +24,35 @@ import {
   updateAgentStore,
 } from "./agent-store";
 import { localTaskConnector } from "./connectors/local-task";
+import { getTaskConnector, listTaskConnectors } from "./connectors";
 import { dispatchAgentCommand } from "./agent-runtime";
 import { confirmAgentAction, sendAgentMessage } from "./agent-chat";
 import { clearRuntimeModelConfig } from "./runtime-config";
 import { setUserSkillDirectoryForTests } from "./user-skills";
+import { clearFeishuConfigForTests, setFeishuConfigForTests } from "./feishu-config";
+import { getFeishuIntegrationStatus } from "./feishu-oauth";
+import { setFeishuIdentityStorePathForTests } from "./feishu-auth-store";
 
 let temporaryDirectory = "";
+let previousMeetingAgentConnector: string | undefined;
 
 beforeEach(async () => {
+  previousMeetingAgentConnector = process.env.MEETING_AGENT_CONNECTOR;
+  delete process.env.MEETING_AGENT_CONNECTOR;
   clearRuntimeModelConfig();
   temporaryDirectory = await mkdtemp(path.join(tmpdir(), "meeting-agent-test-"));
   await resetAgentStoreForTests(path.join(temporaryDirectory, "agent-store.json"));
   setUserSkillDirectoryForTests(path.join(temporaryDirectory, "user-skills"));
+  setFeishuIdentityStorePathForTests(path.join(temporaryDirectory, "feishu-identities.json"));
 });
-
 afterEach(async () => {
   vi.restoreAllMocks();
+  clearFeishuConfigForTests();
+  setFeishuIdentityStorePathForTests(null);
   clearRuntimeModelConfig();
   setUserSkillDirectoryForTests(null);
+  if (previousMeetingAgentConnector === undefined) delete process.env.MEETING_AGENT_CONNECTOR;
+  else process.env.MEETING_AGENT_CONNECTOR = previousMeetingAgentConnector;
   await rm(temporaryDirectory, { recursive: true, force: true });
 });
 
@@ -64,10 +75,76 @@ function answerTestAgentQuestions(id: string, payload: Parameters<typeof answerA
   return answerAgentQuestions(id, payload, testAgentDependencies);
 }
 
+function mockPlatformPlan(value: {
+  intent: "query_platform_settings" | "query_platform_capabilities" | "propose_platform_settings_change" | "guide_platform_setting_change";
+  platform?: "feishu" | null;
+  setting_scope?: "summary" | "due_reminders" | "comments" | "tasklist" | "capabilities" | "unknown" | null;
+  changes?: Record<string, unknown>;
+  remaining_user_message?: string;
+  reply?: string;
+}) {
+  return {
+    intent: value.intent,
+    question_answers: [],
+    external_task_id: null,
+    status: null,
+    task_id: null,
+    field_changes: {},
+    due_reminder_minutes: [],
+    platform: value.platform ?? "feishu",
+    setting_scope: value.setting_scope ?? "unknown",
+    platform_changes: value.changes ?? {},
+    remaining_user_message: value.remaining_user_message ?? "",
+    reply: value.reply || "我会按当前平台能力处理这个请求。",
+  };
+}
+
 describe("agent workflow", () => {
+  it("exposes connector metadata and rejects an unregistered connector", () => {
+    expect(listTaskConnectors()).toEqual([{
+      id: "local-task",
+      name: "Local Task Hub",
+      capabilities: { create: true, read: true, updateStatus: true, updateFields: true, statusValues: ["todo", "in_progress", "done"] },
+    }]);
+    expect(() => getTaskConnector("feishu")).toThrow("Task connector is not registered: feishu");
+  });
+
+  it("preflights Feishu owner mappings before approving external writes", async () => {
+    process.env.MEETING_AGENT_CONNECTOR = "feishu";
+    setFeishuConfigForTests({
+      appId: "cli_test",
+      appSecret: "secret-test",
+      baseURL: "https://open.feishu.cn",
+      userIdType: "open_id",
+      ownerMap: { 张三: "ou_zhangsan" },
+      tasklistGuid: null,
+      tasklistSectionGuid: null,
+      dueReminderMinutes: [],
+      originUrl: null,
+      syncComments: false,
+    });
+
+    const run = await createTestAgentRun({ notes: completeMeetingNotes(), meetingDate: "2026-09-20" });
+    expect(run.connector_id).toBe("feishu");
+
+    await expect(approveAndExecute(run.id, ApprovalPayloadSchema.parse({
+      tasks: run.analysis.tasks,
+      selectedTaskIds: [run.analysis.tasks[0].id],
+    }))).rejects.toMatchObject({
+      status: 422,
+      message: expect.stringContaining("王五"),
+    });
+
+    const unchanged = await getAgentRun(run.id);
+    expect(unchanged?.state).toBe("awaiting_approval");
+    expect(unchanged?.approved_task_ids).toEqual([]);
+    expect(unchanged?.created_tasks).toEqual([]);
+  });
+
   it("records Prompt Skill versions and enters approval for handbook case A", async () => {
     const run = await createTestAgentRun({ notes: completeMeetingNotes(), meetingDate: "2026-09-20" });
     expect(run.state).toBe("awaiting_approval");
+    expect(run.connector_id).toBe("local-task");
     expect(run.questions).toEqual([]);
     expect(run.analysis.tasks[0]).toMatchObject({ owner: "王五", due_date: "2026-09-28", risk: null });
     expect(Object.keys(run.skill_versions)).toEqual(expect.arrayContaining([
@@ -80,7 +157,8 @@ describe("agent workflow", () => {
       "tracking",
       "dialogue-orchestration",
     ]));
-    expect(run.skill_versions["meeting-extraction"]).toBe("1.1.0");
+    expect(run.skill_versions["meeting-extraction"]).toBe("1.4.2");
+    expect(run.skill_versions["completeness-check"]).toBe("1.1.1");
     expect(run.skill_versions["priority-reasoning"]).toBe("1.1.0");
     expect(run.events[0].metadata?.skill_versions).toContain("meeting-extraction");
   });
@@ -136,6 +214,76 @@ describe("agent workflow", () => {
     expect(updated.questions[0]).toMatchObject({ task_id: null, field: "general" });
     expect(updated.clarification_history.at(-1)).toMatchObject({ question_id: confirmQuestion.id, outcome: "rejected_task" });
     expect(updated.events.some((item) => item.message.includes("不是任务"))).toBe(true);
+  });
+
+  it("asks only for the owner when a clear task has a group owner and a known date", async () => {
+    const run = await createAgentRun({
+      notes: "研发这边在周三前完成移动端登录回归并提交问题清单。",
+      meetingDate: "2026-09-20",
+    }, {
+      analyze: async () => ({
+        meeting_title: "发布准备",
+        meeting_date: "2026-09-20",
+        summary: "需要完成移动端回归。",
+        attendees: ["张三", "李四"],
+        decisions: [],
+        tasks: [{
+          id: randomUUID(),
+          title: "完成移动端登录回归并提交问题清单",
+          description: "在 2026-09-23 前完成移动端登录回归并提交问题清单。",
+          owner: null,
+          due_date: "2026-09-23",
+          priority: "medium",
+          priority_reason: "原文没有明确的高或低优先级信号，按默认规则设为中优先级。",
+          priority_evidence: null,
+          priority_conflict: false,
+          status: "todo",
+          evidence: "研发这边在周三前完成移动端登录回归并提交问题清单。",
+          dependencies: [],
+          risk: null,
+          confidence: 0.6,
+        }],
+        follow_ups: [],
+        engine: "ai",
+      }),
+    });
+    expect(run.state).toBe("clarifying");
+    expect(run.questions.map((item) => item.field)).toEqual(["owner"]);
+  });
+
+  it("asks whether an explicitly optional task belongs in the current plan", async () => {
+    const run = await createAgentRun({
+      notes: "王五负责处理一个紧急但可选的埋点补充，是否排入本次上线计划待确认。",
+      meetingDate: "2026-09-20",
+    }, {
+      analyze: async () => ({
+        meeting_title: "发布准备",
+        meeting_date: "2026-09-20",
+        summary: "埋点补充是否纳入本次上线需要确认。",
+        attendees: ["王五"],
+        decisions: [],
+        tasks: [{
+          id: randomUUID(),
+          title: "处理埋点补充",
+          description: "处理一个紧急但可选的埋点补充，并确认是否排入本次上线计划。",
+          owner: "王五",
+          due_date: "2026-09-25",
+          priority: "medium",
+          priority_reason: "原文同时包含冲突的优先级信号。",
+          priority_evidence: null,
+          priority_conflict: true,
+          status: "todo",
+          evidence: "王五负责处理一个紧急但可选的埋点补充，是否排入本次上线计划待确认。",
+          dependencies: [],
+          risk: "是否排入本次上线计划待确认。",
+          confidence: 0.8,
+        }],
+        follow_ups: [],
+        engine: "ai",
+      }),
+    });
+    expect(run.questions.map((item) => item.field)).toEqual(["confirm", "priority"]);
+    expect(run.questions[0].prompt).toContain("纳入本次任务计划");
   });
 
   it("persists TeamContext, normalizes optional blanks, and resolves aliases without clarification", async () => {
@@ -284,6 +432,7 @@ describe("agent workflow", () => {
     const first = await approveAndExecute(run.id, payload);
     expect(first.state).toBe("tracking");
     expect(first.tracking?.total).toBe(1);
+    expect(first.created_tasks[0]).toMatchObject({ connector_id: "local-task", connector_name: "Local Task Hub" });
     const connectorReplay = await localTaskConnector.createTask(run.id, run.analysis.tasks[0]);
     expect(connectorReplay).toMatchObject({ reused: true, task: { id: first.created_tasks[0].external_id } });
 
@@ -466,6 +615,39 @@ describe("agent workflow", () => {
     })).rejects.toMatchObject({ status: 422 });
   });
 
+  it("honors connector-supported status values before quick or chat writes", async () => {
+    const originalStatusValues = localTaskConnector.capabilities.statusValues;
+    localTaskConnector.capabilities.statusValues = ["todo", "done"];
+    try {
+      const run = await createTestAgentRun({ notes: completeMeetingNotes(), meetingDate: "2026-09-20" });
+      const approved = await approveAndExecute(run.id, ApprovalPayloadSchema.parse({
+        tasks: run.analysis.tasks,
+        selectedTaskIds: [run.analysis.tasks[0].id],
+      }));
+      const externalId = approved.created_tasks[0].external_id;
+
+      await expect(updateExternalTaskStatus(externalId, "in_progress")).rejects.toMatchObject({
+        status: 409,
+        message: expect.stringContaining("不能同步为进行中"),
+      });
+      expect((await localTaskConnector.getTask(externalId))?.status).toBe("todo");
+
+      const proposed = await sendAgentMessage(run.id, { content: "把移动端回归测试标记为开始" }, {
+        plan: async () => ({
+          intent: "propose_status",
+          question_answers: [],
+          external_task_id: externalId,
+          status: "in_progress",
+          reply: "准备标记为进行中。",
+        }),
+      });
+      expect(proposed.pending_action).toBeNull();
+      expect(proposed.conversation.at(-1)?.content).toContain("不能同步为“进行中”");
+    } finally {
+      localTaskConnector.capabilities.statusValues = originalStatusValues;
+    }
+  });
+
   it("migrates old run records without resurrecting resolved follow-ups", async () => {
     const run = await createTestAgentRun({ notes: "会议决定完善发布公告，并尽快完成。", meetingDate: "2026-09-20" });
     const answers = run.questions.map((item) => ({
@@ -591,7 +773,13 @@ describe("agent workflow", () => {
     });
     expect((await localTaskConnector.getTask(externalId))?.due_date).toBe("2026-09-28");
     expect(proposed.conversation.at(-1)?.content).toContain("2026-09-28 → 2027-09-28");
+    const updateTask = vi.spyOn(localTaskConnector, "updateTask");
     const updated = await confirmAgentAction(run.id, { actionId: proposed.pending_action!.id, approved: true });
+    expect(updateTask).toHaveBeenCalledWith(externalId, expect.objectContaining({
+      due_date: "2027-09-28",
+      priority: "low",
+      priority_evidence: null,
+    }));
     expect(updated.state).toBe("tracking");
     expect(updated.created_tasks[0]).toMatchObject({ due_date: "2027-09-28", priority: "low", verified: true });
     expect(updated.analysis.tasks[0]).toMatchObject({ due_date: "2027-09-28", priority: "low", priority_evidence: null });
@@ -674,5 +862,873 @@ describe("agent workflow", () => {
     expect(failed.created_tasks[0]).toMatchObject({ verified: false, issues: ["修改后的字段回读不一致"] });
     expect(failed.events.at(-1)).toMatchObject({ type: "error", action: "task_edit_verification_failed" });
     expect(failed.conversation.at(-1)?.content).toContain("暂停追踪");
+  });
+
+  it("lets chat propose and confirm Feishu comment setting changes", async () => {
+    process.env.MEETING_AGENT_CONNECTOR = "feishu";
+    process.env.FEISHU_APP_ID = "cli_test";
+    process.env.FEISHU_APP_SECRET = "secret-test";
+    const run = await createTestAgentRun({ notes: completeMeetingNotes(), meetingDate: "2026-09-20" });
+
+    const proposed = await sendAgentMessage(run.id, { content: "那就开启操作写入评论的功能" }, {
+      plan: async () => mockPlatformPlan({
+        intent: "propose_platform_settings_change",
+        platform: "feishu",
+        setting_scope: "comments",
+        changes: { syncComments: true },
+        reply: "我理解为开启飞书任务的操作记录写入评论。请确认后我再保存。",
+      }),
+    });
+
+    expect(proposed.pending_action).toMatchObject({
+      type: "update_feishu_settings",
+      changes: { syncComments: true },
+      expected: { syncComments: false },
+    });
+    expect(proposed.conversation.at(-1)?.content).toContain("操作记录写入评论");
+    expect(proposed.conversation.at(-1)?.metadata).toMatchObject({
+      agent_source: "model_understanding",
+      tool: "proposePlatformSettingChange",
+      model_called: true,
+    });
+
+    const confirmed = await confirmAgentAction(run.id, { actionId: proposed.pending_action!.id, approved: true });
+
+    expect(confirmed.pending_action).toBeNull();
+    expect(confirmed.conversation.at(-1)?.content).toContain("操作记录写入评论");
+    expect(confirmed.conversation.at(-1)?.metadata).toMatchObject({
+      agent_source: "platform_tool",
+      tool: "updatePlatformSettings",
+      model_called: false,
+    });
+    await expect(getFeishuIntegrationStatus()).resolves.toMatchObject({
+      advancedSettingsSource: "persistent",
+      syncComments: true,
+    });
+  });
+
+  it("lets chat propose and confirm Feishu reminder and tasklist settings", async () => {
+    process.env.MEETING_AGENT_CONNECTOR = "feishu";
+    process.env.FEISHU_APP_ID = "cli_test";
+    process.env.FEISHU_APP_SECRET = "secret-test";
+    const run = await createTestAgentRun({ notes: completeMeetingNotes(), meetingDate: "2026-09-20" });
+
+    const plan = async (_run: unknown, content: string) => {
+      if (content.includes("提前2小时")) {
+        return mockPlatformPlan({
+          intent: "propose_platform_settings_change",
+          platform: "feishu",
+          setting_scope: "due_reminders",
+          changes: { dueReminderMinutes: [120] },
+          reply: "",
+        });
+      }
+      return mockPlatformPlan({
+        intent: "propose_platform_settings_change",
+        platform: "feishu",
+        setting_scope: "tasklist",
+        changes: { tasklistGuid: "tasklist_demo123" },
+        reply: "",
+      });
+    };
+
+    const reminder = await sendAgentMessage(run.id, { content: "把新建任务提醒改成提前2小时" }, { plan });
+    expect(reminder.pending_action).toMatchObject({
+      type: "update_feishu_settings",
+      changes: { dueReminderMinutes: [120] },
+      expected: { dueReminderMinutes: [] },
+    });
+    const reminderConfirmed = await confirmAgentAction(run.id, { actionId: reminder.pending_action!.id, approved: true });
+    expect(reminderConfirmed.conversation.at(-1)?.content).toContain("提前 2 小时");
+    expect(reminderConfirmed.conversation.at(-1)?.content).toContain("不会修改飞书客户端里的任务默认提醒时间");
+    await expect(getFeishuIntegrationStatus()).resolves.toMatchObject({
+      advancedSettingsSource: "persistent",
+      dueReminderMinutes: [120],
+    });
+
+    const tasklist = await sendAgentMessage(run.id, { content: "把飞书清单设置为 tasklist_demo123" }, { plan });
+    expect(tasklist.pending_action).toMatchObject({
+      type: "update_feishu_settings",
+      changes: { tasklistGuid: "tasklist_demo123" },
+    });
+    await confirmAgentAction(run.id, { actionId: tasklist.pending_action!.id, approved: true });
+    await expect(getFeishuIntegrationStatus()).resolves.toMatchObject({
+      tasklistGuid: "tasklist_demo123",
+      dueReminderMinutes: [120],
+    });
+  });
+
+  it("answers Feishu default reminder setting queries from platform config", async () => {
+    process.env.MEETING_AGENT_CONNECTOR = "feishu";
+    setFeishuConfigForTests({
+      appId: "cli_test",
+      appSecret: "secret-test",
+      baseURL: "https://open.feishu.cn",
+      userIdType: "open_id",
+      ownerMap: {},
+      tasklistGuid: null,
+      tasklistSectionGuid: null,
+      dueReminderMinutes: [1440, 30],
+      originUrl: null,
+      syncComments: false,
+    });
+    const run = await createTestAgentRun({ notes: completeMeetingNotes(), meetingDate: "2026-09-20" });
+
+    const answered = await sendAgentMessage(run.id, { content: "现在提醒时间是多久" }, {
+      plan: async () => mockPlatformPlan({
+        intent: "query_platform_settings",
+        platform: "feishu",
+        setting_scope: "due_reminders",
+        changes: {},
+        reply: "",
+      }),
+      platformReply: async (_run, _content, toolPlan) => {
+        const facts = toolPlan.facts as { settings?: { dueReminderLabels?: string[] }, scope?: string };
+        expect(toolPlan.action).toBe("answer_platform_setting");
+        expect(facts.settings?.dueReminderLabels).toEqual(["提前 1 天", "提前 30 分钟"]);
+        return `当前新建任务提醒是 ${facts.settings?.dueReminderLabels?.join("、")}。${facts.scope}`;
+      },
+    });
+
+    expect(answered.pending_action).toBeNull();
+    expect(answered.conversation.at(-1)).toMatchObject({
+      action: "answer_platform_setting",
+    });
+    expect(answered.conversation.at(-1)?.content).toContain("提前 1 天");
+    expect(answered.conversation.at(-1)?.content).toContain("提前 30 分钟");
+    expect(answered.conversation.at(-1)?.metadata).toMatchObject({
+      agent_source: "platform_tool_with_model",
+      tool: "getPlatformSettings",
+      model_called: true,
+    });
+  });
+
+  it("uses model-classified platform context for short Feishu reminder follow-up changes", async () => {
+    process.env.MEETING_AGENT_CONNECTOR = "feishu";
+    setFeishuConfigForTests({
+      appId: "cli_test",
+      appSecret: "secret-test",
+      baseURL: "https://open.feishu.cn",
+      userIdType: "open_id",
+      ownerMap: {},
+      tasklistGuid: null,
+      tasklistSectionGuid: null,
+      dueReminderMinutes: [1440],
+      originUrl: null,
+      syncComments: false,
+    });
+    const run = await createTestAgentRun({ notes: completeMeetingNotes(), meetingDate: "2026-09-20" });
+
+    const plan = async (_run: unknown, content: string, context: unknown) => {
+      if (content === "现在提醒时间是多久") {
+        return mockPlatformPlan({
+          intent: "query_platform_settings",
+          platform: "feishu",
+          setting_scope: "due_reminders",
+          changes: {},
+          reply: "",
+        });
+      }
+      const typedContext = context as {
+        recent_conversation?: Array<{ content: string }>;
+        platform_context?: {
+          settings?: Array<{
+            scope: string;
+            aliases?: string[];
+            valueRules?: string[];
+            current?: { dueReminderMinutes?: number[] };
+          }>;
+        };
+      };
+      const recent = typedContext.recent_conversation || [];
+      const reminderSetting = typedContext.platform_context?.settings?.find((setting) => setting.scope === "due_reminders");
+      expect(recent.some((item) => item.content.includes("当前新建任务提醒"))).toBe(true);
+      expect(reminderSetting?.aliases).toContain("默认到期提醒");
+      expect(reminderSetting?.current?.dueReminderMinutes).toEqual([1440]);
+      expect(reminderSetting?.valueRules?.join(" ")).toContain("半小时为 30");
+      expect(reminderSetting?.valueRules?.join(" ")).toContain("同步旧任务");
+      return mockPlatformPlan({
+        intent: "propose_platform_settings_change",
+        platform: "feishu",
+        setting_scope: "due_reminders",
+        changes: { dueReminderMinutes: [30] },
+        reply: "我理解为把飞书新建任务提醒改成提前 30 分钟。请确认后我再保存到平台连接设置。",
+      });
+    };
+
+    await sendAgentMessage(run.id, { content: "现在提醒时间是多久" }, {
+      plan,
+      platformReply: async () => "当前新建任务提醒是提前 1 天。",
+    });
+
+    const proposed = await sendAgentMessage(run.id, { content: "改成半小时" }, { plan });
+
+    expect(proposed.pending_action).toMatchObject({
+      type: "update_feishu_settings",
+      changes: { dueReminderMinutes: [30] },
+      expected: { dueReminderMinutes: [1440] },
+    });
+    expect(proposed.conversation.at(-1)?.content).toBe("我理解为把飞书新建任务提醒改成提前 30 分钟。请确认后我再保存到平台连接设置。");
+    expect(proposed.conversation.at(-1)?.metadata).toMatchObject({
+      agent_source: "model_understanding",
+      tool: "proposePlatformSettingChange",
+      model_called: true,
+    });
+  });
+
+  it("lets chat propose syncing the unchanged Feishu reminder setting to existing tasks", async () => {
+    process.env.MEETING_AGENT_CONNECTOR = "feishu";
+    setFeishuConfigForTests({
+      appId: "cli_test",
+      appSecret: "secret-test",
+      baseURL: "https://open.feishu.cn",
+      userIdType: "open_id",
+      ownerMap: {},
+      tasklistGuid: null,
+      tasklistSectionGuid: null,
+      dueReminderMinutes: [15],
+      originUrl: null,
+      syncComments: false,
+    });
+    const run = await createTestAgentRun({ notes: completeMeetingNotes(), meetingDate: "2026-09-20" });
+    const task = run.analysis.tasks[0];
+    await updateAgentStore((store) => {
+      const current = store.runs[run.id];
+      current.state = "tracking";
+      current.created_tasks = [{
+        task_id: task.id,
+        external_id: "feishu-guid-existing",
+        external_url: null,
+        connector_id: "feishu",
+        connector_name: "飞书任务",
+        title: task.title,
+        description: task.description,
+        owner: task.owner,
+        due_date: task.due_date,
+        priority: task.priority,
+        priority_reason: task.priority_reason,
+        priority_evidence: task.priority_evidence,
+        status: "todo",
+        evidence: task.evidence,
+        dependencies: task.dependencies,
+        risk: task.risk,
+        reused: false,
+        verified: true,
+        issues: [],
+      }];
+      return current;
+    });
+
+    const proposed = await sendAgentMessage(run.id, { content: "把提醒补写到已有飞书任务" }, {
+      plan: async () => mockPlatformPlan({
+        intent: "propose_platform_settings_change",
+        platform: "feishu",
+        setting_scope: "due_reminders",
+        changes: { dueReminderMinutes: [15] },
+        reply: "我理解为把当前新建任务提醒同步到已有飞书任务。请确认后我再执行。",
+      }),
+    });
+
+    expect(proposed.pending_action).toMatchObject({
+      type: "update_feishu_settings",
+      changes: { dueReminderMinutes: [15] },
+      expected: { dueReminderMinutes: [15] },
+    });
+    expect(proposed.conversation.at(-1)?.content).toContain("同步");
+
+    let rawTask: Record<string, unknown> = {
+      guid: "feishu-guid-existing",
+      summary: task.title,
+      description: task.description,
+      due: { timestamp: String(Date.parse(`${task.due_date}T00:00:00+08:00`)), is_all_day: true },
+      members: [],
+      extra: JSON.stringify({
+        source_run_id: run.id,
+        source_task_id: task.id,
+        idempotency_key: "idem-existing",
+        source_owner: task.owner,
+        priority: task.priority,
+        priority_reason: task.priority_reason,
+        priority_evidence: task.priority_evidence,
+        evidence: task.evidence,
+        dependencies: task.dependencies,
+        risk: task.risk,
+      }),
+      reminders: [{ relative_fire_minute: 30 }],
+      status: "todo",
+      completed_at: "0",
+    };
+    const addBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/tenant_access_token/internal")) {
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: "t-test", expire: 7200 }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/open-apis/task/v2/tasks/feishu-guid-existing/add_reminders") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        addBodies.push(body);
+        rawTask = { ...rawTask, reminders: [...(rawTask.reminders as unknown[]), ...(body.reminders as unknown[])] };
+        return new Response(JSON.stringify({ code: 0, data: { reminders: body.reminders } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/open-apis/task/v2/tasks/feishu-guid-existing") && init?.method === "GET") {
+        return new Response(JSON.stringify({ code: 0, data: { task: rawTask } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ code: 404, msg: "unexpected request" }), { status: 404, headers: { "content-type": "application/json" } });
+    }));
+
+    const confirmed = await confirmAgentAction(run.id, { actionId: proposed.pending_action!.id, approved: true });
+    const confirmationText = confirmed.conversation.at(-1)?.content || "";
+    expect(addBodies).toEqual([{ reminders: [{ relative_fire_minute: 15 }] }]);
+    expect(confirmationText).toContain("同步边界提示");
+    expect(confirmationText).toContain("旧提醒缺少飞书 reminder id");
+  });
+
+  it("treats task-specific Feishu reminder changes as a task operation, not a global setting", async () => {
+    process.env.MEETING_AGENT_CONNECTOR = "feishu";
+    setFeishuConfigForTests({
+      appId: "cli_test",
+      appSecret: "secret-test",
+      baseURL: "https://open.feishu.cn",
+      userIdType: "open_id",
+      ownerMap: {},
+      tasklistGuid: null,
+      tasklistSectionGuid: null,
+      dueReminderMinutes: [1440],
+      originUrl: null,
+      syncComments: false,
+    });
+    const run = await createTestAgentRun({ notes: completeMeetingNotes(), meetingDate: "2026-09-20" });
+    const task = run.analysis.tasks[0];
+    await updateAgentStore((store) => {
+      const current = store.runs[run.id];
+      current.state = "tracking";
+      current.created_tasks = [{
+        task_id: task.id,
+        external_id: "feishu-guid-reminder",
+        external_url: null,
+        connector_id: "feishu",
+        connector_name: "飞书任务",
+        title: task.title,
+        description: task.description,
+        owner: task.owner,
+        due_date: task.due_date,
+        priority: task.priority,
+        priority_reason: task.priority_reason,
+        priority_evidence: task.priority_evidence,
+        status: "todo",
+        evidence: task.evidence,
+        dependencies: task.dependencies,
+        risk: task.risk,
+        reused: false,
+        verified: true,
+        issues: [],
+      }];
+      return current;
+    });
+
+    const proposed = await sendAgentMessage(run.id, { content: "改任务1的到期提醒为15分钟" }, {
+      plan: async () => ({
+        intent: "propose_task_reminders",
+        question_answers: [],
+        external_task_id: "feishu-guid-reminder",
+        status: null,
+        task_id: task.id,
+        field_changes: {},
+        due_reminder_minutes: [15],
+        reply: "准备修改任务1的到期提醒。",
+      }),
+    });
+
+    expect(proposed.pending_action).toMatchObject({
+      type: "sync_task_reminders",
+      external_task_id: "feishu-guid-reminder",
+      dueReminderMinutes: [15],
+    });
+    expect(proposed.conversation.at(-1)?.content).toContain("只修改这个飞书任务");
+    expect(proposed.conversation.at(-1)?.metadata).toMatchObject({
+      tool: "dialogue-orchestration",
+      model_called: false,
+    });
+  });
+
+  it("queues a task status proposal after confirming a platform setting from the same message", async () => {
+    process.env.MEETING_AGENT_CONNECTOR = "feishu";
+    setFeishuConfigForTests({
+      appId: "cli_test",
+      appSecret: "secret-test",
+      baseURL: "https://open.feishu.cn",
+      userIdType: "open_id",
+      ownerMap: {},
+      tasklistGuid: null,
+      tasklistSectionGuid: null,
+      dueReminderMinutes: [],
+      originUrl: null,
+      syncComments: false,
+    });
+    const run = await createTestAgentRun({ notes: completeMeetingNotes(), meetingDate: "2026-09-20" });
+    const task = run.analysis.tasks[0];
+    await updateAgentStore((store) => {
+      const current = store.runs[run.id];
+      current.state = "tracking";
+      current.created_tasks = [{
+        task_id: task.id,
+        external_id: "feishu-guid-status",
+        external_url: null,
+        connector_id: "feishu",
+        connector_name: "飞书任务",
+        title: task.title,
+        description: task.description,
+        owner: task.owner,
+        due_date: task.due_date,
+        priority: task.priority,
+        priority_reason: task.priority_reason,
+        priority_evidence: task.priority_evidence,
+        status: "todo",
+        evidence: task.evidence,
+        dependencies: task.dependencies,
+        risk: task.risk,
+        reused: false,
+        verified: true,
+        issues: [],
+      }];
+      return current;
+    });
+
+    const proposed = await sendAgentMessage(run.id, { content: "开启评论，编辑S1为已完成" }, {
+      plan: async (_run, content) => content === "开启评论，编辑S1为已完成"
+        ? mockPlatformPlan({
+          intent: "propose_platform_settings_change",
+          platform: "feishu",
+          setting_scope: "comments",
+          changes: { syncComments: true },
+          remaining_user_message: "编辑S1为已完成",
+          reply: "我理解为开启飞书任务的操作记录写入评论。",
+        })
+        : ({
+          intent: "propose_status",
+          question_answers: [],
+          external_task_id: "feishu-guid-status",
+          status: "done",
+          task_id: task.id,
+          field_changes: {},
+          due_reminder_minutes: [],
+          reply: "准备把 S1 改为已完成。",
+        }),
+    });
+
+    expect(proposed.pending_action).toMatchObject({
+      type: "update_feishu_settings",
+      changes: { syncComments: true },
+      queued_message: "编辑S1为已完成",
+      queued_plan: { intent: "propose_status", external_task_id: "feishu-guid-status", status: "done" },
+    });
+    expect(proposed.conversation.at(-1)?.content).toContain("第二个操作");
+
+    const continued = await confirmAgentAction(run.id, { actionId: proposed.pending_action!.id, approved: true });
+
+    expect(continued.pending_action).toMatchObject({
+      type: "set_task_status",
+      external_task_id: "feishu-guid-status",
+      status: "done",
+    });
+    expect(continued.conversation.at(-1)?.content).toContain("改为已完成");
+  });
+
+  it("keeps original task numbers when a platform no-op message continues to a queued status change", async () => {
+    process.env.MEETING_AGENT_CONNECTOR = "feishu";
+    setFeishuConfigForTests({
+      appId: "cli_test",
+      appSecret: "secret-test",
+      baseURL: "https://open.feishu.cn",
+      userIdType: "open_id",
+      ownerMap: {},
+      tasklistGuid: null,
+      tasklistSectionGuid: null,
+      dueReminderMinutes: [],
+      originUrl: null,
+      syncComments: true,
+    });
+    const run = await createTestAgentRun({ notes: completeMeetingNotes(), meetingDate: "2026-09-20" });
+    const firstTask = run.analysis.tasks[0];
+    const secondTask = {
+      ...firstTask,
+      id: randomUUID(),
+      title: "整理飞书状态写回复测记录",
+      description: "整理飞书状态写回复测记录并补充到验收材料。",
+      owner: "张三",
+      due_date: "2026-09-29",
+      evidence: "张三负责整理飞书状态写回复测记录。",
+    };
+    await updateAgentStore((store) => {
+      const current = store.runs[run.id];
+      current.analysis.tasks = [firstTask, secondTask];
+      current.state = "tracking";
+      current.approved_task_ids = [secondTask.id];
+      current.created_tasks = [{
+        task_id: secondTask.id,
+        external_id: "feishu-guid-task2",
+        external_url: null,
+        connector_id: "feishu",
+        connector_name: "飞书任务",
+        title: secondTask.title,
+        description: secondTask.description,
+        owner: secondTask.owner,
+        due_date: secondTask.due_date,
+        priority: secondTask.priority,
+        priority_reason: secondTask.priority_reason,
+        priority_evidence: secondTask.priority_evidence,
+        status: "todo",
+        evidence: secondTask.evidence,
+        dependencies: secondTask.dependencies,
+        risk: secondTask.risk,
+        reused: false,
+        verified: true,
+        issues: [],
+      }];
+      return current;
+    });
+
+    const proposed = await sendAgentMessage(run.id, { content: "开启评论，编辑任务2为已完成" }, {
+      platformReply: async () => "评论记录目前已经开启，不需要再次保存。",
+      plan: async (_run, content, context) => {
+        if (content === "开启评论，编辑任务2为已完成") {
+          return mockPlatformPlan({
+            intent: "propose_platform_settings_change",
+            platform: "feishu",
+            setting_scope: "comments",
+            changes: { syncComments: true },
+            remaining_user_message: "编辑任务2为已完成",
+            reply: "我理解为开启飞书任务的操作记录写入评论。",
+          });
+        }
+        expect(content).toBe("编辑任务2为已完成");
+        const typedContext = context as {
+          tasks: Array<{ task_number: number; id: string; title: string }>;
+          created_tasks: Array<{
+            task_number: number;
+            source_task_number: number | null;
+            created_task_number: number;
+            task_id: string;
+            external_id: string;
+            title: string;
+          }>;
+        };
+        expect(typedContext.tasks.map((task) => [task.task_number, task.id])).toEqual([
+          [1, firstTask.id],
+          [2, secondTask.id],
+        ]);
+        expect(typedContext.created_tasks).toEqual([expect.objectContaining({
+          task_number: 2,
+          source_task_number: 2,
+          created_task_number: 1,
+          task_id: secondTask.id,
+          external_id: "feishu-guid-task2",
+          title: secondTask.title,
+        })]);
+        return {
+          intent: "propose_status",
+          question_answers: [],
+          external_task_id: "feishu-guid-task2",
+          status: "done",
+          task_id: secondTask.id,
+          field_changes: {},
+          due_reminder_minutes: [],
+          reply: "准备把任务2改为已完成。",
+        };
+      },
+    });
+
+    expect(proposed.pending_action).toMatchObject({
+      type: "set_task_status",
+      external_task_id: "feishu-guid-task2",
+      status: "done",
+    });
+    expect(proposed.conversation.at(-2)?.content).toContain("评论记录目前已经开启");
+    expect(proposed.conversation.at(-1)?.content).toContain("整理飞书状态写回复测记录");
+    expect(proposed.conversation.at(-1)?.content).toContain("改为已完成");
+  });
+
+  it("normalizes null optional fields from model plans before replying", async () => {
+    const run = await createTestAgentRun({ notes: completeMeetingNotes(), meetingDate: "2026-09-20" });
+
+    const result = await sendAgentMessage(run.id, { content: "在任务2下发评论123" }, {
+      plan: async () => ({
+        intent: "unsure",
+        question_answers: null,
+        external_task_id: null,
+        status: null,
+        task_id: null,
+        field_changes: null,
+        due_reminder_minutes: null,
+        comment: null,
+        platform: null,
+        setting_scope: null,
+        platform_changes: null,
+        remaining_user_message: null,
+        reply: "当前运行只有任务1，没有任务2。请确认要评论的任务编号或标题。",
+      } as any),
+    });
+
+    expect(result.pending_action).toBeNull();
+    expect(result.conversation.at(-1)).toMatchObject({
+      role: "assistant",
+      kind: "agent_report",
+      content: "当前运行只有任务1，没有任务2。请确认要评论的任务编号或标题。",
+      action: "unsure",
+    });
+  });
+
+  it("lets chat propose and confirm a comment on a specific Feishu task", async () => {
+    process.env.MEETING_AGENT_CONNECTOR = "feishu";
+    setFeishuConfigForTests({
+      appId: "cli_test",
+      appSecret: "secret-test",
+      baseURL: "https://open.feishu.cn",
+      userIdType: "open_id",
+      ownerMap: {},
+      tasklistGuid: null,
+      tasklistSectionGuid: null,
+      dueReminderMinutes: [],
+      originUrl: null,
+      syncComments: false,
+    });
+    const run = await createTestAgentRun({ notes: completeMeetingNotes(), meetingDate: "2026-09-20" });
+    const firstTask = run.analysis.tasks[0];
+    const secondTask = {
+      ...firstTask,
+      id: randomUUID(),
+      title: "整理飞书评论同步复测记录",
+      description: "整理飞书评论同步复测记录并补充到验收材料。",
+      owner: "张三",
+      due_date: "2026-10-02",
+      evidence: "张三负责整理飞书评论同步复测记录。",
+    };
+    await updateAgentStore((store) => {
+      const current = store.runs[run.id];
+      current.analysis.tasks = [firstTask, secondTask];
+      current.state = "tracking";
+      current.approved_task_ids = [secondTask.id];
+      current.created_tasks = [{
+        task_id: secondTask.id,
+        external_id: "feishu-guid-task2",
+        external_url: null,
+        connector_id: "feishu",
+        connector_name: "飞书任务",
+        title: secondTask.title,
+        description: secondTask.description,
+        owner: secondTask.owner,
+        due_date: secondTask.due_date,
+        priority: secondTask.priority,
+        priority_reason: secondTask.priority_reason,
+        priority_evidence: secondTask.priority_evidence,
+        status: "todo",
+        evidence: secondTask.evidence,
+        dependencies: secondTask.dependencies,
+        risk: secondTask.risk,
+        reused: false,
+        verified: true,
+        issues: ["飞书评论同步失败：应用缺少 task:comment:write 权限。"],
+      }];
+      return current;
+    });
+
+    const rawTask = {
+      guid: "feishu-guid-task2",
+      summary: secondTask.title,
+      description: secondTask.description,
+      due: { timestamp: String(Date.parse(`${secondTask.due_date}T00:00:00+08:00`)), is_all_day: true },
+      members: [],
+      extra: JSON.stringify({
+        source_run_id: run.id,
+        source_task_id: secondTask.id,
+        idempotency_key: "idem-task2",
+        source_owner: secondTask.owner,
+        priority: secondTask.priority,
+        priority_reason: secondTask.priority_reason,
+        priority_evidence: secondTask.priority_evidence,
+        evidence: secondTask.evidence,
+        dependencies: secondTask.dependencies,
+        risk: secondTask.risk,
+      }),
+      status: "todo",
+      completed_at: "0",
+    };
+    const commentBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/tenant_access_token/internal")) {
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: "t-test", expire: 7200 }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/open-apis/task/v2/tasks/feishu-guid-task2") && init?.method === "GET") {
+        return new Response(JSON.stringify({ code: 0, data: { task: rawTask } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/open-apis/task/v2/comments") && init?.method === "POST") {
+        commentBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return new Response(JSON.stringify({ code: 0, data: { comment: { comment_id: "comment-manual-001" } } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ code: 404, msg: "unexpected request" }), { status: 404, headers: { "content-type": "application/json" } });
+    }));
+
+    const proposed = await sendAgentMessage(run.id, { content: "在任务2下发评论123" }, {
+      plan: async (_run, content, context) => {
+        expect(content).toBe("在任务2下发评论123");
+        expect(context).toMatchObject({
+          connector: { id: "feishu" },
+          created_tasks: [expect.objectContaining({
+            task_number: 2,
+            source_task_number: 2,
+            external_id: "feishu-guid-task2",
+          })],
+        });
+        return {
+          intent: "propose_task_comment",
+          question_answers: {},
+          external_task_id: "feishu-guid-task2",
+          task_id: secondTask.id,
+          comment: "评论123",
+          reply: "准备给任务2追加评论。",
+        };
+      },
+    });
+
+    expect(proposed.pending_action).toMatchObject({
+      type: "add_task_comment",
+      external_task_id: "feishu-guid-task2",
+      task_id: secondTask.id,
+      comment: "评论123",
+    });
+    expect(proposed.conversation.at(-2)).toMatchObject({ role: "user", content: "在任务2下发评论123" });
+    expect(proposed.conversation.at(-1)?.content).toContain("评论123");
+    expect(proposed.conversation.at(-1)?.metadata).toMatchObject({
+      agent_source: "model_understanding",
+      tool: "dialogue-orchestration",
+    });
+
+    const confirmed = await confirmAgentAction(run.id, { actionId: proposed.pending_action!.id, approved: true });
+
+    expect(commentBodies).toEqual([expect.objectContaining({
+      content: "评论123",
+      resource_type: "task",
+      resource_id: "feishu-guid-task2",
+    })]);
+    expect(confirmed.pending_action).toBeNull();
+    expect(confirmed.conversation.at(-1)?.content).toContain("已在");
+    expect(confirmed.conversation.at(-1)?.content).toContain("评论123");
+    expect(confirmed.created_tasks[0].issues).toEqual([]);
+  });
+
+  it("answers Feishu settings summary and guides vague tasklist changes through model replies over platform facts", async () => {
+    process.env.MEETING_AGENT_CONNECTOR = "feishu";
+    setFeishuConfigForTests({
+      appId: "cli_test",
+      appSecret: "secret-test",
+      baseURL: "https://open.feishu.cn",
+      userIdType: "open_id",
+      ownerMap: {},
+      tasklistGuid: "tasklist_existing",
+      tasklistSectionGuid: "section_existing",
+      dueReminderMinutes: [1440],
+      originUrl: null,
+      syncComments: true,
+    });
+    const run = await createTestAgentRun({ notes: completeMeetingNotes(), meetingDate: "2026-09-20" });
+
+    const platformReply = async (_run: unknown, content: string, toolPlan: { action: string; facts: Record<string, unknown> }) => {
+      if (content.includes("写入设置")) {
+        const facts = toolPlan.facts as { settings?: { tasklistGuid?: string; dueReminderLabels?: string[]; syncComments?: boolean } };
+        return `当前清单是 ${facts.settings?.tasklistGuid}，提醒是 ${facts.settings?.dueReminderLabels?.join("、")}，评论记录${facts.settings?.syncComments ? "已启用" : "未启用"}。`;
+      }
+      if (content.includes("功能和边界")) {
+        const facts = toolPlan.facts as { capabilities?: { supported?: string[]; boundaries?: string[] } };
+        return `已接入：${facts.capabilities?.supported?.join("、")}。边界：${facts.capabilities?.boundaries?.join("、")}。`;
+      }
+      const facts = toolPlan.facts as { safeNextSteps?: string[] };
+      return `不能只按名称保存清单。下一步：${facts.safeNextSteps?.join("；")}。`;
+    };
+
+    const plan = async (_run: unknown, content: string) => {
+      if (content.includes("写入设置")) {
+        return mockPlatformPlan({
+          intent: "query_platform_settings",
+          platform: "feishu",
+          setting_scope: "summary",
+          changes: {},
+          reply: "",
+        });
+      }
+      if (content.includes("功能和边界")) {
+        return mockPlatformPlan({
+          intent: "query_platform_capabilities",
+          platform: "feishu",
+          setting_scope: "capabilities",
+          changes: {},
+          reply: "",
+        });
+      }
+      return mockPlatformPlan({
+        intent: "guide_platform_setting_change",
+        platform: "feishu",
+        setting_scope: "tasklist",
+        changes: {},
+        reply: "",
+      });
+    };
+
+    const summary = await sendAgentMessage(run.id, { content: "飞书写入设置现在是什么" }, { plan, platformReply });
+    expect(summary.conversation.at(-1)?.content).toContain("tasklist_existing");
+    expect(summary.conversation.at(-1)?.content).toContain("提前 1 天");
+    expect(summary.conversation.at(-1)?.content).toContain("已启用");
+    expect(summary.conversation.at(-1)?.metadata).toMatchObject({
+      agent_source: "platform_tool_with_model",
+      tool: "getPlatformSettings",
+      model_called: true,
+    });
+
+    const capabilities = await sendAgentMessage(run.id, { content: "飞书现在支持哪些功能和边界" }, { plan, platformReply });
+    expect(capabilities.conversation.at(-1)?.content).toContain("创建任务");
+    expect(capabilities.conversation.at(-1)?.content).toContain("Webhook 自动同步尚未接入");
+
+    const guided = await sendAgentMessage(run.id, { content: "把清单改成开发清单" }, { plan, platformReply });
+    expect(guided.pending_action).toBeNull();
+    expect(guided.conversation.at(-1)?.content).toContain("读取清单");
+    expect(guided.conversation.at(-1)?.content).toContain("链接");
+    expect(guided.conversation.at(-1)?.content).toContain("ID");
+  });
+
+  it("migrates legacy runs and created tasks to the local connector", async () => {
+    const run = await createTestAgentRun({ notes: completeMeetingNotes(), meetingDate: "2026-09-20" });
+    const approved = await approveAndExecute(run.id, ApprovalPayloadSchema.parse({
+      tasks: run.analysis.tasks, selectedTaskIds: [run.analysis.tasks[0].id],
+    }));
+    const legacy = await readAgentStore((store) => store) as unknown as Record<string, any>;
+    legacy.schema_version = 4;
+    delete legacy.runs[run.id].connector_id;
+    delete legacy.runs[run.id].created_tasks[0].connector_id;
+    delete legacy.runs[run.id].created_tasks[0].connector_name;
+    delete legacy.tasks[approved.created_tasks[0].external_id].connector_id;
+    const storePath = path.join(temporaryDirectory, "agent-store.json");
+    await writeFile(storePath, JSON.stringify(legacy, null, 2), "utf8");
+    await reloadAgentStoreForTests();
+
+    const migrated = await getAgentRun(run.id);
+    expect(migrated).toMatchObject({
+      connector_id: "local-task",
+      created_tasks: [{ connector_id: "local-task", connector_name: "Local Task Hub" }],
+    });
+    expect(await localTaskConnector.getTask(approved.created_tasks[0].external_id)).toMatchObject({ connector_id: "local-task" });
+  });
+
+  it("refreshes tracking by each recorded external task id", async () => {
+    const run = await createTestAgentRun({ notes: completeMeetingNotes(), meetingDate: "2026-09-20" });
+    const approved = await approveAndExecute(run.id, ApprovalPayloadSchema.parse({
+      tasks: run.analysis.tasks, selectedTaskIds: [run.analysis.tasks[0].id],
+    }));
+    const externalId = approved.created_tasks[0].external_id;
+    const getTask = vi.spyOn(localTaskConnector, "getTask");
+
+    await refreshTracking(run.id);
+
+    expect(getTask).toHaveBeenCalledWith(externalId);
+    expect(getTask.mock.calls.every(([id]) => id === externalId)).toBe(true);
   });
 });

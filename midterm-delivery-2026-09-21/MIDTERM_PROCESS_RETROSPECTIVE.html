@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>中期制作过程复盘</title>
+  <style>
+    :root {
+      --surface: #ffffff;
+      --bg: #f5f6f7;
+      --soft: #f0f2f3;
+      --text: #151718;
+      --secondary: #555d61;
+      --muted: #7a8388;
+      --border: rgba(21, 23, 24, 0.12);
+      --border-strong: rgba(21, 23, 24, 0.2);
+      --blue: #075fa8;
+      --green: #197042;
+      --orange: #a64b13;
+      --red: #a33232;
+      --reading: 850px;
+      font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { max-width: 100%; overflow-x: clip; }
+    body { margin: 0; color: var(--text); background: var(--bg); font-size: 15px; line-height: 1.75; }
+    .shell { width: min(1160px, calc(100% - 32px)); margin: 20px auto 56px; overflow: hidden; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.05); }
+    .topbar { display: flex; align-items: center; justify-content: space-between; min-height: 50px; padding: 10px 18px; border-bottom: 1px solid var(--border); }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+    .mark { width: 18px; height: 18px; border-radius: 4px; background: linear-gradient(145deg, #075fa8, #2f7d4c); }
+    .meta { color: var(--muted); font-size: 12px; }
+    main { padding: 48px; }
+    .reading { width: min(var(--reading), 100%); margin: 0 auto; }
+    .kicker { margin-bottom: 12px; color: var(--blue); font-size: 12px; font-weight: 700; letter-spacing: .08em; }
+    h1 { max-width: 780px; margin: 0; font-size: 38px; font-weight: 600; line-height: 1.25; }
+    h2 { margin: 48px 0 12px; font-size: 25px; font-weight: 600; line-height: 1.4; }
+    h3 { margin: 0 0 8px; font-size: 16px; }
+    p { margin: 0 0 14px; }
+    .deck { max-width: 800px; margin: 18px 0 32px; color: var(--secondary); font-size: 17px; }
+    .summary { display: grid; grid-template-columns: 150px 1fr; gap: 24px; padding: 26px 0; border-top: 1px solid var(--border-strong); border-bottom: 1px solid var(--border-strong); }
+    .summary-label { color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .06em; }
+    .summary-body { display: grid; gap: 12px; }
+    .summary-body p { margin: 0; color: var(--secondary); }
+    .summary-body strong { color: var(--text); }
+    .status-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 30px 0 8px; }
+    .status { padding: 18px; border: 1px solid var(--border); border-radius: 8px; }
+    .status strong { display: block; margin-bottom: 5px; font-size: 20px; }
+    .status span { color: var(--secondary); font-size: 13px; }
+    .process { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0 6px; padding: 18px; border: 1px solid var(--border); border-radius: 8px; background: var(--soft); }
+    .step { display: inline-flex; align-items: center; gap: 8px; }
+    .step b { padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--surface); font-size: 13px; }
+    .step:not(:last-child)::after { content: "→"; color: var(--muted); }
+    .finding { margin: 14px 0; padding: 20px; border: 1px solid var(--border); border-left: 4px solid var(--blue); border-radius: 8px; }
+    .finding.resolved { border-left-color: var(--green); }
+    .finding.open { border-left-color: var(--orange); }
+    .finding p:last-child { margin-bottom: 0; }
+    .label { display: inline-block; margin-right: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
+    .table-card { margin: 16px 0 40px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; }
+    .table-head { padding: 14px 16px; border-bottom: 1px solid var(--border); background: var(--soft); }
+    .table-head p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+    .table-scroll { width: 100%; overflow-x: auto; }
+    table { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 13px 14px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    tbody tr:last-child td { border-bottom: 0; }
+    .done { color: var(--green); font-weight: 700; }
+    .risk { color: var(--orange); font-weight: 700; }
+    ol, ul { margin: 10px 0 18px; padding-left: 23px; }
+    li { margin-bottom: 8px; }
+    .caveat { margin-top: 44px; padding: 18px; border-radius: 8px; background: var(--soft); color: var(--secondary); font-size: 13px; }
+    .source { margin-top: 18px; color: var(--muted); font-size: 12px; }
+    code { padding: 2px 5px; border-radius: 4px; background: var(--soft); font-family: Consolas, monospace; font-size: .92em; }
+    @media (prefers-color-scheme: dark) {
+      :root { --surface: #202223; --bg: #151718; --soft: #2b2e30; --text: #f3f4f4; --secondary: #c5c9cb; --muted: #9ca4a8; --border: rgba(255,255,255,.09); --border-strong: rgba(255,255,255,.18); --blue: #64b1ee; --green: #71ce98; --orange: #f0a06b; --red: #ef8d8d; }
+    }
+    @media (max-width: 760px) {
+      .shell { width: 100%; margin: 0; border: 0; border-radius: 0; }
+      main { padding: 30px 18px; }
+      h1 { font-size: 31px; }
+      .summary { grid-template-columns: 1fr; gap: 10px; }
+      .status-grid { grid-template-columns: 1fr; }
+      .meta { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand"><span class="mark" aria-hidden="true"></span>会议行动智能体</div>
+      <div class="meta">中期制作复盘 · 2026-09-22</div>
+    </header>
+    <main data-report-audience="product stakeholders">
+      <article class="reading">
+        <div class="kicker">中期开发复盘</div>
+        <header data-contract-section="title"><h1>中期制作过程中的问题与挑战</h1></header>
+        <p class="deck">最大的困难不是把模型接入页面，而是把最初偏“一次性结构化抽取”的实现，重构成用户能理解、能控制、能核对结果的受控 Agent 工作流。</p>
+
+        <section class="summary" data-contract-section="executive-summary">
+          <div class="summary-label">Executive Summary</div>
+          <div class="summary-body">
+            <p><strong>首要问题是产品模型定义偏差。</strong>早期版本更接近“LLM 把纪要转成 JSON”，对话、澄清、审批、执行和追踪彼此割裂，因此后续经历了从脚本式处理到状态机 Agent 的架构重构。</p>
+            <p><strong>最频繁的返工来自流程语义与界面不同步。</strong>例如已澄清内容仍显示待确认、逾期事件触发突兀、问题没有参考原文、写操作没有统一确认入口。状态正确并不代表用户能看懂或信任流程。</p>
+            <p><strong>测试与汇报一开始更关注“有多少功能”，而不是一条真实会议流程能否成立。</strong>简单样例、分散截图和技术名词容易造成过度宣传；后期才补齐真实口语化纪要、证据链、隔离运行截图和验收边界。</p>
+            <p><strong>中期版本已形成受控闭环，但智能效果尚未完成系统化评测。</strong>工程回归与浏览器 QA 已通过，真实第三方连接器、真实会议标注集评测和生产级凭据/数据能力仍属于后期工作。</p>
+          </div>
+        </section>
+
+        <section class="status-grid" aria-label="复盘概览">
+          <div class="status"><strong>47 / 47</strong><span>当前自动化工程测试通过，但模型意图主要使用 mock</span></div>
+          <div class="status"><strong>3 种宽度</strong><span>桌面、390px、320px 完成浏览器可见性复核</span></div>
+          <div class="status"><strong>2 类后期重点</strong><span>真实任务平台接入、基于标注数据的效果评测</span></div>
+        </section>
+
+        <h2>架构返工的根源：最初做成了“会输出 JSON 的脚本”</h2>
+        <p>早期实现把模型主要放在文本抽取入口，按钮和脚本直接承担后续状态修改。这样虽然能快速演示“纪要变任务”，但不具备完整的 Agent 生命周期：模型不理解当前运行状态，用户操作也没有统一经过意图判断、状态守卫、确认和回报。</p>
+        <div class="process" aria-label="当前闭环流程">
+          <span class="step"><b>会议纪要</b></span><span class="step"><b>分析</b></span><span class="step"><b>澄清</b></span><span class="step"><b>审批</b></span><span class="step"><b>执行</b></span><span class="step"><b>回读验证</b></span><span class="step"><b>追踪</b></span><span class="step"><b>完成</b></span>
+        </div>
+        <div class="finding resolved">
+          <h3>采取的修正</h3>
+          <p>建立状态机驱动的单 Agent 流程；页面快捷操作和自然语言命令进入统一运行时；模型负责理解和提出受限操作，确定性代码负责状态守卫、审批、幂等写入、回读和验证。</p>
+        </div>
+        <div class="finding open">
+          <h3>仍然存在的挑战</h3>
+          <p>必须在“像 Agent 一样理解自然语言”和“不能绕过审批或错误写入”之间保持边界。当前方案有意限制任意增删任务、跨运行修改和自由文本直接审批，这属于安全设计，不应包装成无限自主能力。</p>
+        </div>
+
+        <h2>用户配置一度被固定字段污染，Prompt Skill 分层后来才清晰</h2>
+        <p>早期用户团队知识采用固定的结构化字段，难以容纳成员别称、行业术语、会议习惯和自定义优先级规则，也让用户误以为所谓 Skill 只是旧本地脚本的配置表。这里需要区分两件事：用户提供知识应允许自然语言，模型输出为了进入状态机仍然必须结构化。</p>
+        <div class="finding resolved">
+          <h3>采取的修正</h3>
+          <p>用户上下文改为多份 Markdown Skill，自然语言描述“老张是张三”“上线阻塞项默认高优先级”等知识；系统 Prompt Skill 与用户 Skill 分层，用户内容不能覆盖审批、安全规则和工具权限。每次运行保存实际启用的 Skill 快照。</p>
+        </div>
+        <div class="finding open">
+          <h3>表达上的挑战</h3>
+          <p>项目登记了 9 个版本化 Prompt Skill，但并非 9 个模块都逐一调用模型。实际分析注入 3 个模块，对话注入 2 个模块，其余流程由状态机执行。报告若直接写“九大智能模块”，会制造误解。</p>
+        </div>
+
+        <h2>流程正确不等于用户能理解：澄清、优先级和事件都需要证据链</h2>
+        <p>多轮体验问题暴露出同一个根因：后端状态、模型判断和界面文案没有共享同一套语义。用户不仅要知道“系统在问什么”，还要知道“为什么问、对应哪句原文、回答后改变了什么”。</p>
+        <section class="table-card">
+          <div class="table-head"><h3>主要问题、修正与当前状态</h3><p>按产品流程整理，不按提交次数或页面组件罗列</p></div>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>问题表现</th><th>根因</th><th>采取的修正</th><th>当前判断</th></tr></thead>
+              <tbody>
+                <tr><td>已回答的问题仍显示“待确认”</td><td>待办与历史使用了不同来源，生命周期未统一</td><td><code>open_items</code> 只保留未解决项；澄清历史独立保留</td><td class="done">已修正并回归</td></tr>
+                <tr><td>负责人、日期问题缺少对应原文</td><td>问题只有字段类型，没有上下文证据</td><td>每个任务级澄清展示任务内容和参考原文</td><td class="done">已修正</td></tr>
+                <tr><td>优先级只给结论，没有理由</td><td>只保存枚举值，未把模型推理变成可审核数据</td><td>保存理由、原文证据和冲突标记；审批页可调整</td><td class="done">已修正</td></tr>
+                <tr><td>逾期提示在状态改变后突然出现</td><td>追踪刷新、状态操作和事件回报缺乏统一语境</td><td>事件记录任务名、前后状态、来源、日期和首次逾期；重复事件去重</td><td class="done">工程回归通过</td></tr>
+                <tr><td>按钮操作像脚本，Agent 不参与</td><td>UI 直接调用不同业务端点</td><td>快捷操作统一经 Agent Runtime；自然语言写操作先提案再确认</td><td class="done">主路径已重构</td></tr>
+                <tr><td>用户看不到模型到底收到了什么</td><td>只展示归一化任务结果</td><td>运行检查器展示原文、Prompt、Skill 快照、原始输出和归一化结果</td><td class="done">已实现</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <h2>测试难点不是增加文本数量，而是覆盖真实语境和失败路径</h2>
+        <p>最初三个样例过短、彼此割裂，而且有的样例声称测试别称或澄清，实际对应配置和上下文却为空。随后虽然合并了综合输入，但又暴露出“会议纪要写得太规整”的问题。最终才形成两种同测试点输入：结构化综合纪要和多人逐句发言、插话的口语化记录，同时保留 13 套独立回归用例用于定位失败。</p>
+        <div class="finding resolved">
+          <h3>目前覆盖的关键场景</h3>
+          <p>完整任务、模糊候选、人员别称、负责人不明、日期缺失、优先级冲突、依赖与风险、非任务讨论、人工审批、回读不一致、状态变更和完成闭环。</p>
+        </div>
+        <div class="finding open">
+          <h3>不能越界的结论</h3>
+          <p>47 项自动化测试主要证明状态机、接口和边界行为，模型调用使用可控 mock；真实 DeepSeek 只完成了若干隔离冒烟路径。十套对话人工样例尚未全部逐项执行，也没有大规模人工标注的真实会议数据，因此不能宣称任务识别率或澄清准确率已经达标。</p>
+        </div>
+
+        <h2>演示环境和 UI 可见性本身也是工程交付</h2>
+        <p>本轮多次出现“代码里已经有功能，但用户实际看不到或无法稳定使用”的问题：后端没有启动导致 API 配置保存失败、空响应被前端当 JSON 解析、顶栏滚走、下拉菜单打开后页面滚动条消失、移动端遮挡，以及通透度控制面板被定位到视口外。这些问题说明仅检查组件存在或接口通过远远不够。</p>
+        <div class="finding resolved">
+          <h3>采取的修正</h3>
+          <p>启动脚本分别检查前端与 API 服务，前端安全处理空响应；完成桌面、390px 和 320px 的实际浏览器 QA；对自定义菜单、弹窗滚动、常驻导航和浮层定位进行复核；截图使用隔离数据运行，避免污染用户存储。</p>
+        </div>
+        <div class="finding open">
+          <h3>持续挑战</h3>
+          <p>当前本机单用户演示依赖两个服务进程和本地文件持久化。运行可靠性已经改善，但仍不等于生产部署、并发数据存储、认证或多租户能力。</p>
+        </div>
+
+        <h2>报告和 PPT 也经历了“功能堆砌”到“证据叙事”的返工</h2>
+        <p>早期材料存在 AI 套话、空泛后期目标、把内部模块数量当成果、截图按单个状态重复计数，以及示例人物和真实实现不一致等问题。后续将材料集中到同一交付目录，按功能证据链组织截图，并明确 Local Task Hub、真实模型冒烟和工程测试各自能证明什么。</p>
+        <div class="finding resolved">
+          <h3>已经形成的汇报原则</h3>
+          <p>围绕开题提出的三个核心问题组织证据：AI 提议优先级与人工审核、人员别称理解、人员与任务关系不明确时的主动澄清。后期目标只突出真实任务平台连接器和效果指标，不用没有验收标准的工程名词填满页面。</p>
+        </div>
+
+        <section data-contract-section="recommended-next-steps">
+          <h2>后续最值得优先解决的两项工作</h2>
+          <ol>
+            <li><strong>接入一个真实任务平台。</strong>沿用当前已验证的审批、幂等和回读协议，补充实际授权、字段映射、错误处理和恢复路径。只有这一步完成，才能验证 Local Task Hub 抽象是否真正可迁移。</li>
+            <li><strong>建立真实会议效果评测。</strong>准备脱敏、人工标注的会议样本，分别统计任务识别、负责人/日期抽取、别称归一、澄清必要性、优先级建议和端到端写入成功率；把模型质量与工程流程测试分开报告。</li>
+          </ol>
+        </section>
+
+        <section data-contract-section="further-questions">
+          <h2>复盘后仍需回答的问题</h2>
+          <ul>
+            <li>真实任务平台最终选择哪一个，其字段模型与当前 Local Task Hub 有多少差异？</li>
+            <li>澄清质量如何评价：问题数量越少越好，还是信息补全率与用户操作成本共同衡量？</li>
+            <li>对话解释发生事实偏差时，是否需要逐字段引用运行数据，而不是允许模型自由组织全部内容？</li>
+            <li>十套人工对话样例应在何种固定模型版本和参数下执行，才能形成可复现基线？</li>
+          </ul>
+        </section>
+
+        <section class="caveat" data-contract-section="caveats-and-assumptions">
+          <strong>口径说明。</strong>本复盘依据开发手册、验收结果、中期报告、汇报材料、截图索引和 2026-09-21 至 2026-09-22 的提交记录整理。文中“已修正”表示代码或当前验收证据已覆盖，不代表模型在所有真实会议中的语义准确率已经得到证明。截图来自多个隔离运行时，必须按截图索引标明归属，不能拼成一条并不存在的连续运行。
+        </section>
+        <p class="source">证据来源：<code>docs/DEVELOPMENT_AGENT_HANDBOOK.md</code>、<code>docs/ACCEPTANCE_RESULTS.md</code>、<code>docs/MIDTERM_REPORT.md</code>、<code>docs/MIDTERM_PRESENTATION_MATERIALS.md</code>、<code>docs/MIDTERM_SCREENSHOT_INDEX.md</code> 与 Git 提交历史。</p>
+      </article>
+    </main>
+  </div>
+</body>
+</html>
