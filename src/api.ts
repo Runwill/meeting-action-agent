@@ -191,6 +191,19 @@ export function markFeishuRedirectVerified() {
   });
 }
 
+export function saveFeishuAppConfig(input: {
+  appId: string;
+  appSecret: string;
+  baseURL?: string;
+  userIdType?: "open_id" | "union_id" | "user_id";
+  enabled?: boolean;
+}) {
+  return requestJson<FeishuIntegrationStatus>("/api/integrations/feishu/app-config", {
+    method: "PUT",
+    ...jsonBody(input),
+  });
+}
+
 export function saveFeishuSettings(input: {
   tasklistGuid: string | null;
   tasklistSectionGuid: string | null;

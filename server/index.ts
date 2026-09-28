@@ -11,7 +11,7 @@ import { AgentCommandSchema, dispatchAgentCommand } from "./agent-runtime.ts";
 import { confirmAgentAction, sendAgentMessage } from "./agent-chat.ts";
 import { listUserSkills, saveUserSkills } from "./user-skills.ts";
 import { listTaskConnectors } from "./connectors/index.ts";
-import { getPublicFeishuConfig } from "./feishu-config.ts";
+import { getPublicFeishuConfig, savePersistentFeishuAppConfig } from "./feishu-config.ts";
 import { FeishuOAuthError, completeFeishuOAuth, createFeishuOAuthStart, defaultFeishuOAuthReturnUrl, getFeishuIntegrationStatus, markFeishuRedirectVerified, searchFeishuTasklists, updateFeishuAdvancedSettings } from "./feishu-oauth.ts";
 
 const app = express();
@@ -46,6 +46,15 @@ app.get("/api/integrations/feishu/status", async (_request, response) => {
     response.json(await getFeishuIntegrationStatus());
   } catch {
     response.status(500).json({ error: "飞书身份绑定状态暂时无法读取。" });
+  }
+});
+
+app.put("/api/integrations/feishu/app-config", async (request, response) => {
+  try {
+    await savePersistentFeishuAppConfig(request.body);
+    response.json(await getFeishuIntegrationStatus());
+  } catch (error) {
+    response.status(400).json({ error: error instanceof Error ? error.message : "飞书应用配置无效。" });
   }
 });
 

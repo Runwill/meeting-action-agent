@@ -289,7 +289,7 @@ export async function getFeishuIntegrationStatus() {
   const publicConfig = getPublicFeishuConfig();
   return {
     configured: !!config,
-    enabled: process.env.MEETING_AGENT_CONNECTOR === "feishu" && !!config,
+    enabled: publicConfig.enabled,
     oauthEnabled: !!config && isOAuthRedirectVerified(),
     redirectUri: config ? redirectUri() : null,
     appConsoleUrl: config ? appConsoleUrl(config.appId, config.baseURL) : null,

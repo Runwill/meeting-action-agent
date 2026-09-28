@@ -65,6 +65,8 @@ export interface FeishuIntegrationStatus {
   redirectUri: string | null;
   appConsoleUrl: string | null;
   appPermissionUrl: string | null;
+  appConfigSource: "persistent" | "environment" | "test" | "none";
+  appIdPreview: string | null;
   mappedOwnerNames: string[];
   advancedSettingsSource: "persistent" | "environment" | "none";
   tasklistGuid: string | null;
@@ -123,6 +125,8 @@ export interface ConnectorsStatus {
     baseURL: string | null;
     userIdType: "open_id" | "union_id" | "user_id" | null;
     ownerCount: number;
+    appConfigSource: "persistent" | "environment" | "test" | "none";
+    appIdPreview: string | null;
     advancedSettingsSource: "persistent" | "environment" | "none";
     tasklistGuid: string | null;
     tasklistSectionGuid: string | null;

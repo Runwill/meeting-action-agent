@@ -709,6 +709,20 @@ body,.hero-title,.manifesto h2,.results-header h2,.config-head h2{letter-spacing
 .guide-now strong{color:#fff;font-size:15px}
 .guide-now p{margin:0;color:rgba(255,255,255,.62);font-size:12px;line-height:1.55}
 .guide-actions{display:grid;gap:7px;margin-top:7px}
+.guide-actions-inline{grid-template-columns:auto minmax(0,1fr);align-items:center}
+.feishu-credential-card{display:grid;gap:11px;margin-top:9px;padding:12px;border:1px solid rgba(183,243,209,.16);border-radius:14px;background:linear-gradient(135deg,rgba(183,243,209,.065),rgba(168,162,255,.04)),rgba(0,0,0,.14)}
+.feishu-credential-card>small{color:rgba(255,255,255,.46);font-size:10px;line-height:1.55}
+.feishu-credential-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.feishu-credential-fields .config-field:first-child{grid-column:auto}
+.feishu-credential-fields .config-field input,.feishu-credential-fields .config-field select{width:100%;min-width:0;height:42px;border:1px solid rgba(255,255,255,.12);border-radius:11px;background:rgba(0,0,0,.22);padding:0 12px;color:#fff;font-size:11px;outline:none}
+.feishu-credential-fields .config-field input:focus,.feishu-credential-fields .config-field select:focus{border-color:rgba(168,162,255,.62);background:rgba(13,11,24,.5)}
+.feishu-credential-fields .config-field input::placeholder{color:rgba(255,255,255,.28)}
+.feishu-credential-fields .config-field select{color-scheme:dark}
+.feishu-credential-advanced{grid-column:1/-1;border:1px solid rgba(255,255,255,.075);border-radius:12px;padding:10px;background:rgba(255,255,255,.02)}
+.feishu-credential-advanced summary{color:rgba(255,255,255,.52);font-size:10px;cursor:pointer;list-style:none}
+.feishu-credential-advanced summary::-webkit-details-marker{display:none}
+.feishu-credential-advanced .feishu-credential-fields{margin-top:9px}
+.credential-save-action{justify-self:start}
 .guide-primary-action{display:inline-flex;align-items:center;justify-content:center;gap:7px;width:max-content;max-width:100%;min-height:38px;padding:0 13px;border:1px solid rgba(183,243,209,.42);border-radius:999px;background:linear-gradient(135deg,rgba(183,243,209,.18),rgba(168,162,255,.14));color:#f7fff9;box-shadow:0 12px 28px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.12);cursor:pointer;font-size:12px;font-weight:650;text-decoration:none}
 .guide-primary-action svg{width:15px;height:15px}
 .guide-primary-action:disabled{opacity:.42;cursor:not-allowed;box-shadow:none}
@@ -731,9 +745,15 @@ body,.hero-title,.manifesto h2,.results-header h2,.config-head h2{letter-spacing
 .deploy-copy-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px;align-items:end}
 .deploy-copy-row button{height:43px;padding:0 13px;border:1px solid rgba(255,255,255,.13);border-radius:11px;background:rgba(255,255,255,.055);color:#fff;cursor:pointer;font-size:11px;white-space:nowrap}
 .deploy-copy-row button:disabled{opacity:.34;cursor:not-allowed}
+.deploy-copy-row-actions{grid-template-columns:auto auto;align-items:center;justify-content:start;margin-top:8px}
+.deploy-copy-row-actions .guide-primary-action{width:max-content}
 .copy-feedback{margin-top:9px!important;color:rgba(255,255,255,.42)!important;font-size:11px!important}
 .feishu-deploy-note code{padding:1px 5px;border:1px solid rgba(255,255,255,.1);border-radius:6px;background:rgba(0,0,0,.2);color:rgba(255,255,255,.74);font-family:Inter,monospace;font-size:11px}
-@media(max-width:390px){.integration-card-head,.feishu-bind-panel{padding:12px}.integration-card-head{flex-direction:column;gap:9px}.integration-card-head strong{align-self:flex-start}.guide-steps li{grid-template-columns:24px 1fr;padding:8px}.guide-primary-action,.guide-confirm-action{width:100%}.deploy-copy-row{grid-template-columns:1fr}.deploy-copy-row button{width:100%}}
+.env-template{max-height:220px;margin:10px 0 12px;padding:12px;border:1px solid rgba(168,162,255,.16);border-radius:12px;background:rgba(0,0,0,.24);color:rgba(255,255,255,.72);font:11px/1.55 Inter,monospace;white-space:pre-wrap;overflow:auto;overflow-wrap:anywhere;scrollbar-width:thin;scrollbar-color:rgba(168,162,255,.55) transparent}
+.env-template::-webkit-scrollbar{width:7px;height:7px}
+.env-template::-webkit-scrollbar-track{background:transparent}
+.env-template::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background:rgba(168,162,255,.48);background-clip:content-box}
+@media(max-width:390px){.integration-card-head,.feishu-bind-panel{padding:12px}.integration-card-head{flex-direction:column;gap:9px}.integration-card-head strong{align-self:flex-start}.guide-steps li{grid-template-columns:24px 1fr;padding:8px}.guide-primary-action,.guide-confirm-action{width:100%}.guide-actions-inline,.feishu-credential-fields,.deploy-copy-row,.deploy-copy-row-actions{grid-template-columns:1fr}.deploy-copy-row button,.deploy-copy-row-actions .guide-primary-action,.credential-save-action{width:100%}}
 
 /* Platform connection dialog: fixed shell, scrollable body, anchored actions. */
 .config-panel.platform-panel{width:min(680px,100%);height:min(760px,calc(100svh - 48px));max-height:calc(100svh - 48px);display:flex;flex-direction:column;padding:0;overflow:hidden}

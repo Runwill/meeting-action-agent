@@ -30,6 +30,7 @@ import {
   getFeishuIntegrationStatus,
   getAgentRun,
   markFeishuRedirectVerified,
+  saveFeishuAppConfig,
   saveFeishuSettings,
   searchFeishuTasklists,
   sendAgentCommand,
@@ -126,6 +127,8 @@ const emptyFeishuStatus: FeishuIntegrationStatus = {
   redirectUri: null,
   appConsoleUrl: null,
   appPermissionUrl: null,
+  appConfigSource: "none",
+  appIdPreview: null,
   mappedOwnerNames: [],
   advancedSettingsSource: "none",
   tasklistGuid: null,
@@ -151,6 +154,8 @@ const emptyConnectorsStatus: ConnectorsStatus = {
     baseURL: null,
     userIdType: null,
     ownerCount: 0,
+    appConfigSource: "none",
+    appIdPreview: null,
     advancedSettingsSource: "none",
     tasklistGuid: null,
     tasklistSectionGuid: null,
@@ -242,6 +247,12 @@ export default function App() {
     tasklistSectionGuid: "",
     dueReminderMinutes: "",
     syncComments: false,
+  });
+  const [feishuAppForm, setFeishuAppForm] = useState({
+    appId: "",
+    appSecret: "",
+    baseURL: "https://open.feishu.cn",
+    userIdType: "open_id" as "open_id" | "union_id" | "user_id",
   });
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [skillDemoPrompt, setSkillDemoPrompt] = useState(false);
@@ -540,7 +551,7 @@ export default function App() {
     ? "管理员已完成飞书应用配置，成员只需在这里绑定自己的飞书身份。"
     : feishuStatus.configured
       ? "飞书应用凭据已配置，但身份授权回调还没就绪，请部署人员补充回调地址。"
-    : "当前演示环境还没有完成飞书应用配置，请先由部署人员配置 App ID 和 App Secret。";
+    : "当前还没有保存飞书应用凭据。请先在本平台填写 App ID 和 App Secret。";
   const feishuStatusTitle = feishuCanBind
     ? "飞书任务身份绑定可用"
     : feishuStatus.configured
@@ -568,6 +579,18 @@ export default function App() {
     : "https://open.feishu.cn/app");
   const feishuTasklistPermissionGuide = "飞书任务清单读取失败时，请在飞书开放平台进入当前应用的“权限管理”，搜索并开通任务/任务清单读取相关权限，保存并发布应用后，回到会议行动智能体重新绑定一次飞书成员，再重新读取清单。";
   const feishuCommentPermissionGuide = "飞书评论同步失败时，请在飞书开放平台进入当前应用的“权限管理”，搜索并开通 task:comment:write；如果还要读取评论做核验，再开通 task:comment:read。保存并发布应用后，回到会议行动智能体重新检查连接，并用测试任务再次触发状态或字段写回。";
+  const feishuAppListUrl = "https://open.feishu.cn/app";
+  const feishuEnvReturnUrl = `${window.location.origin}${window.location.pathname || "/"}#workflow`;
+  const feishuEnvTemplate = [
+    "# .env（保存在项目根目录，不要提交 Git）",
+    "MEETING_AGENT_CONNECTOR=feishu",
+    "FEISHU_APP_ID=在飞书开放平台复制的 App ID",
+    "FEISHU_APP_SECRET=在飞书开放平台复制的 App Secret",
+    "FEISHU_BASE_URL=https://open.feishu.cn",
+    "FEISHU_USER_ID_TYPE=open_id",
+    "FEISHU_OAUTH_REDIRECT_URI=http://localhost:8788/api/integrations/feishu/oauth/callback",
+    `FEISHU_OAUTH_RETURN_URL=${feishuEnvReturnUrl}`,
+  ].join("\n");
   const feishuAdvancedItems: Array<{
     label: string;
     status: string;
@@ -652,7 +675,7 @@ export default function App() {
         ? "现在可以绑定成员身份"
         : "可以回到会议审批并写入飞书";
   const feishuGuideBody = feishuGuideStep === 1
-    ? "部署人员先在本机 .env 或系统环境变量里填入 FEISHU_APP_ID、FEISHU_APP_SECRET，并把任务平台切到 feishu。"
+    ? "在飞书开放平台进入你创建的应用，复制 App ID 和 App Secret，然后回到本平台填写并保存。Base URL、用户 ID 类型和任务平台启用会自动使用推荐值。"
     : feishuGuideStep === 2
       ? "本系统可以复制回调地址并打开当前飞书应用的安全设置页；在飞书里粘贴保存后，回到这里点“我已在飞书保存”。"
       : feishuGuideStep === 3
@@ -810,6 +833,52 @@ export default function App() {
       notify("已复制配置说明");
     } catch {
       setFeishuCopyMessage("复制失败，请手动选中说明文字复制。");
+    }
+  }
+
+  async function copyFeishuEnvTemplate() {
+    try {
+      await navigator.clipboard.writeText(feishuEnvTemplate);
+      setFeishuCopyMessage("已复制高级部署模板。普通本地演示优先使用上方表单保存，不需要手动编辑 .env。");
+      notify("已复制飞书配置模板");
+    } catch {
+      setFeishuCopyMessage("复制失败，请手动复制下方 .env 模板。");
+    }
+  }
+
+  function updateFeishuAppForm(field: keyof typeof feishuAppForm, value: string) {
+    setFeishuAppForm((current) => ({ ...current, [field]: value }));
+    setFeishuError("");
+    setFeishuCopyMessage("");
+  }
+
+  async function saveFeishuCredentials() {
+    const appId = feishuAppForm.appId.trim();
+    const appSecret = feishuAppForm.appSecret.trim();
+    if (!appId || !appSecret) {
+      setFeishuError("请填写飞书开放平台里的 App ID 和 App Secret。");
+      return;
+    }
+    setFeishuBusy(true);
+    setFeishuError("");
+    setFeishuCopyMessage("");
+    try {
+      const nextStatus = await saveFeishuAppConfig({
+        appId,
+        appSecret,
+        baseURL: feishuAppForm.baseURL.trim() || "https://open.feishu.cn",
+        userIdType: feishuAppForm.userIdType,
+        enabled: true,
+      });
+      setFeishuStatus(nextStatus);
+      setFeishuAppForm((current) => ({ ...current, appSecret: "" }));
+      await refreshConnectorsStatus();
+      setFeishuCopyMessage("飞书应用凭据已保存到本机后端，App Secret 不会回显。现在可以继续第 2 步登记回调地址。");
+      notify("飞书应用凭据已保存");
+    } catch (error) {
+      setFeishuError(errorMessage(error, "飞书应用凭据暂时无法保存。"));
+    } finally {
+      setFeishuBusy(false);
     }
   }
 
@@ -1654,6 +1723,47 @@ export default function App() {
                   <span>当前步骤 {feishuGuideStep} / 4</span>
                   <strong>{feishuGuideTitle}</strong>
                   <p>{feishuGuideBody}</p>
+                  {feishuGuideStep === 1 && (
+                    <div className="feishu-credential-card" aria-label="飞书应用凭据配置">
+                      <div className="guide-actions guide-actions-inline">
+                        <a className="guide-primary-action" href={feishuAppListUrl} target="_blank" rel="noreferrer">
+                          打开飞书应用列表 <ArrowUpRight />
+                        </a>
+                        <small>如果还没有应用，请在飞书开放平台创建企业自建应用；创建完成后回到这里填 App ID 和 App Secret。</small>
+                      </div>
+                      <div className="feishu-credential-fields">
+                        <label className="config-field">
+                          <span>App ID</span>
+                          <input value={feishuAppForm.appId} onChange={(event) => updateFeishuAppForm("appId", event.target.value)} placeholder="cli_..." autoComplete="off" spellCheck={false} />
+                        </label>
+                        <label className="config-field">
+                          <span>App Secret</span>
+                          <input type="password" value={feishuAppForm.appSecret} onChange={(event) => updateFeishuAppForm("appSecret", event.target.value)} placeholder="只保存到本机后端，不会回显" autoComplete="new-password" spellCheck={false} />
+                        </label>
+                        <details className="feishu-credential-advanced">
+                          <summary>高级选项</summary>
+                          <div className="feishu-credential-fields">
+                            <label className="config-field">
+                              <span>飞书开放平台地址</span>
+                              <input value={feishuAppForm.baseURL} onChange={(event) => updateFeishuAppForm("baseURL", event.target.value)} placeholder="https://open.feishu.cn" spellCheck={false} />
+                            </label>
+                            <label className="config-field">
+                              <span>用户 ID 类型</span>
+                              <select value={feishuAppForm.userIdType} onChange={(event) => updateFeishuAppForm("userIdType", event.target.value)}>
+                                <option value="open_id">open_id（推荐）</option>
+                                <option value="union_id">union_id</option>
+                                <option value="user_id">user_id</option>
+                              </select>
+                            </label>
+                          </div>
+                        </details>
+                        <button type="button" className="guide-confirm-action credential-save-action" onClick={() => void saveFeishuCredentials()} disabled={feishuBusy}>
+                          {feishuBusy ? "正在保存…" : "保存到本机并继续"} <Check />
+                        </button>
+                      </div>
+                      <small>App Secret 会通过本机 API 写入 Git 忽略的服务端配置文件；不会写入浏览器 localStorage、任务记录或 Git。保存后不需要重启服务。</small>
+                    </div>
+                  )}
                   {feishuGuideStep === 2 && (
                     <div className="guide-actions">
                       {feishuStatus.redirectUri ? (
@@ -1673,7 +1783,7 @@ export default function App() {
                   )}
                 </div>
                 <ol className="guide-steps">
-                  <li className={guideStepClass(1)}><b>1</b><div><strong>配置飞书应用</strong><span>部署人员在本机配置 App ID、App Secret，并把任务平台设为飞书。</span></div></li>
+                  <li className={guideStepClass(1)}><b>1</b><div><strong>配置飞书应用</strong><span>打开飞书应用列表，复制 App ID / App Secret，回到本平台保存。</span></div></li>
                   <li className={guideStepClass(2)}><b>2</b><div><strong>登记回调地址</strong><span>本系统复制回调地址并打开飞书安全设置，部署人员在后台粘贴保存。</span></div></li>
                   <li className={guideStepClass(3)}><b>3</b><div><strong>绑定成员身份</strong><span>成员输入系统姓名或别名，跳转飞书确认身份后返回本系统。</span></div></li>
                   <li className={guideStepClass(4)}><b>4</b><div><strong>审批后写入飞书</strong><span>回到会议 Agent，分析纪要并人工批准后创建飞书任务。</span></div></li>
@@ -1691,19 +1801,35 @@ export default function App() {
                 <ul>{feishuStatus.linkedUsers.map((user) => <li key={user.id}><strong>{user.name}</strong><span>{user.aliases.length ? `别名：${user.aliases.join("、")}` : "未设置别名"}</span><small>{user.emailPreview || "邮箱未展示"} · {user.hasOpenId ? "open_id 已保存" : "缺少 open_id"}</small></li>)}</ul>
               ) : <p>还没有绑定飞书成员。要创建带负责人的飞书任务，需要先完成至少一个成员身份绑定。</p>}
             </div>
-            <details className="feishu-deploy-note" open={feishuGuideStep <= 2}>
-              <summary>部署配置参考</summary>
-              <p>第 2 步由部署人员完成：点击上方主按钮后，本系统会复制下面的地址并打开飞书当前应用的安全设置页。把地址粘贴到重定向 URL / OAuth 回调地址设置中并保存；保存后回到这里点“我已在飞书保存，继续绑定”，系统会在本机记录核验状态并开放成员绑定。</p>
-              <div className="deploy-copy-row">
-                <label className="config-field"><span>OAuth 回调地址</span><input value={feishuStatus.redirectUri || "尚未可用"} readOnly /></label>
-                <button type="button" onClick={() => void copyFeishuRedirectUri()} disabled={!feishuStatus.redirectUri}>只复制地址</button>
-              </div>
-              <p className="copy-feedback">{feishuCopyMessage || "优先使用上方主按钮；飞书里保存完成后，不需要改配置文件，直接点“我已在飞书保存”。"}</p>
+            <details className="feishu-deploy-note" open={feishuGuideStep === 2}>
+              <summary>{feishuGuideStep === 1 ? "高级部署方式（可选）" : "部署配置参考"}</summary>
+              {feishuGuideStep === 1 ? (
+                <>
+                  <p>普通本地演示不需要手动编辑 <code>.env</code>，优先使用上方表单保存。只有部署到固定服务器或需要团队统一环境变量时，才使用下面模板；保存后需要重启服务。不要修改 <code>.env.example</code>，也不要把 App Secret 发到前端、日志或 Git。</p>
+                  <pre className="env-template" aria-label="飞书 .env 配置模板">{feishuEnvTemplate}</pre>
+                  <div className="deploy-copy-row deploy-copy-row-actions">
+                    <a className="guide-primary-action" href={feishuAppListUrl} target="_blank" rel="noreferrer">打开飞书应用列表 <ArrowUpRight /></a>
+                    <button type="button" onClick={() => void copyFeishuEnvTemplate()}>复制高级模板</button>
+                  </div>
+                </>
+              ) : (
+                <p>第 2 步由部署人员完成：点击上方主按钮后，本系统会复制下面的地址并打开飞书当前应用的安全设置页。把地址粘贴到重定向 URL / OAuth 回调地址设置中并保存；保存后回到这里点“我已在飞书保存，继续绑定”，系统会在本机记录核验状态并开放成员绑定。</p>
+              )}
+              {feishuGuideStep !== 1 && (
+                <>
+                  <div className="deploy-copy-row">
+                    <label className="config-field"><span>OAuth 回调地址</span><input value={feishuStatus.redirectUri || "尚未可用"} readOnly /></label>
+                    <button type="button" onClick={() => void copyFeishuRedirectUri()} disabled={!feishuStatus.redirectUri}>只复制地址</button>
+                  </div>
+                  <p className="copy-feedback">{feishuCopyMessage || "优先使用上方主按钮；飞书里保存完成后，不需要改配置文件，直接点“我已在飞书保存”。"}</p>
+                </>
+              )}
+              {feishuGuideStep === 1 && <p className="copy-feedback">{feishuCopyMessage || "推荐使用上方表单保存；高级模板只用于部署人员手动维护环境变量。"}</p>}
             </details>
             </div>
             </div>
             <footer className="config-actions platform-actions">
-              <div className="platform-action-feedback" aria-live="polite">{feishuError ? <span className="is-error">{feishuError}</span> : <span>{feishuCanBind ? "点击绑定后会跳转到飞书，由飞书确认身份后返回本系统。" : "当前只能查看状态；在飞书里保存回调地址后，点“我已在飞书保存，继续绑定”。"}</span>}</div>
+              <div className="platform-action-feedback" aria-live="polite">{feishuError ? <span className="is-error">{feishuError}</span> : <span>{feishuGuideStep === 1 ? "先在上方保存 App ID 和 App Secret；保存成功后会自动进入回调地址步骤。" : feishuCanBind ? "点击绑定后会跳转到飞书，由飞书确认身份后返回本系统。" : "当前只能查看状态；在飞书里保存回调地址后，点“我已在飞书保存，继续绑定”。"}</span>}</div>
               <div className="platform-action-buttons"><button type="button" onClick={() => void refreshFeishuStatus()} disabled={feishuBusy}>重新检查</button><button className="save-config" type="button" onClick={() => void beginFeishuBinding()} disabled={feishuBusy || !feishuCanBind}>{feishuBusy ? "正在发起授权…" : "绑定当前飞书用户"} <ArrowRight /></button></div>
             </footer>
           </section>

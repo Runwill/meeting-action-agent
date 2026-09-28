@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentTask } from "./agent-store";
-import { clearFeishuConfigForTests, setFeishuConfigForTests, type FeishuConfig } from "./feishu-config";
+import { clearFeishuConfigForTests, savePersistentFeishuAppConfig, setFeishuAppConfigPathForTests, setFeishuConfigForTests, type FeishuConfig } from "./feishu-config";
 import { createFeishuTaskConnector, FeishuConnectorError } from "./connectors/feishu";
 import { clearFeishuUserTokenCacheForTests, completeFeishuOAuth, createFeishuOAuthStart, getFeishuIntegrationStatus, markFeishuRedirectVerified, normalizeFeishuOAuthReturnUrl, searchFeishuTasklists, updateFeishuAdvancedSettings } from "./feishu-oauth";
 import { setFeishuIdentityStorePathForTests } from "./feishu-auth-store";
@@ -81,6 +81,7 @@ function feishuStoredTask(overrides: Record<string, unknown> = {}) {
 beforeEach(async () => {
   temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "feishu-oauth-test-"));
   setFeishuIdentityStorePathForTests(path.join(temporaryDirectory, "feishu-identities.json"));
+  setFeishuAppConfigPathForTests(path.join(temporaryDirectory, "feishu-app-config.env"));
   setFeishuConfigForTests(config);
   delete process.env.FEISHU_OAUTH_REDIRECT_VERIFIED;
   delete process.env.FEISHU_OAUTH_RETURN_URL;
@@ -97,6 +98,7 @@ beforeEach(async () => {
 afterEach(async () => {
   clearFeishuConfigForTests();
   setFeishuIdentityStorePathForTests(null);
+  setFeishuAppConfigPathForTests(null);
   delete process.env.FEISHU_OAUTH_REDIRECT_VERIFIED;
   delete process.env.FEISHU_OAUTH_RETURN_URL;
   delete process.env.APP_PUBLIC_URL;
@@ -657,6 +659,33 @@ describe("feishu task connector", () => {
 });
 
 describe("feishu identity oauth", () => {
+  it("lets the platform persist Feishu app credentials without editing .env", async () => {
+    clearFeishuConfigForTests();
+
+    await expect(getFeishuIntegrationStatus()).resolves.toMatchObject({
+      configured: false,
+      enabled: false,
+    });
+
+    await expect(savePersistentFeishuAppConfig({
+      appId: "cli_saved_from_ui",
+      appSecret: "secret-from-ui",
+    })).resolves.toMatchObject({
+      configured: true,
+      enabled: true,
+      appConfigSource: "persistent",
+      baseURL: "https://open.feishu.cn",
+      userIdType: "open_id",
+    });
+
+    await expect(getFeishuIntegrationStatus()).resolves.toMatchObject({
+      configured: true,
+      enabled: true,
+      oauthEnabled: false,
+      appConsoleUrl: "https://open.feishu.cn/app/cli_saved_from_ui/safe",
+    });
+  });
+
   it("keeps member binding closed until the redirect URL is verified by deployment", async () => {
     await expect(getFeishuIntegrationStatus()).resolves.toMatchObject({
       configured: true,

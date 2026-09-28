@@ -9,6 +9,8 @@ data/agent-store.json
 data/agent-store.json.tmp
 data/feishu-identities.json
 data/feishu-identities.json.tmp
+data/feishu-app-config.env
+data/feishu-app-config.env.*.tmp
 data/model-config.env
 data/model-config.env.*.tmp
 data/user-skills/
