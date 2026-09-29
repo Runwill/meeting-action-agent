@@ -29,7 +29,7 @@ import { dispatchAgentCommand } from "./agent-runtime";
 import { confirmAgentAction, sendAgentMessage } from "./agent-chat";
 import { clearRuntimeModelConfig } from "./runtime-config";
 import { setUserSkillDirectoryForTests } from "./user-skills";
-import { clearFeishuConfigForTests, setFeishuConfigForTests } from "./feishu-config";
+import { clearFeishuConfigForTests, setFeishuAppConfigPathForTests, setFeishuConfigForTests } from "./feishu-config";
 import { getFeishuIntegrationStatus } from "./feishu-oauth";
 import { setFeishuIdentityStorePathForTests } from "./feishu-auth-store";
 
@@ -44,10 +44,15 @@ beforeEach(async () => {
   await resetAgentStoreForTests(path.join(temporaryDirectory, "agent-store.json"));
   setUserSkillDirectoryForTests(path.join(temporaryDirectory, "user-skills"));
   setFeishuIdentityStorePathForTests(path.join(temporaryDirectory, "feishu-identities.json"));
+  // Never let a developer's persisted Feishu app credentials change the
+  // connector used by ordinary Agent tests. Feishu-specific cases opt in
+  // through setFeishuConfigForTests below.
+  setFeishuAppConfigPathForTests(path.join(temporaryDirectory, "feishu-app-config.env"));
 });
 afterEach(async () => {
   vi.restoreAllMocks();
   clearFeishuConfigForTests();
+  setFeishuAppConfigPathForTests(null);
   setFeishuIdentityStorePathForTests(null);
   clearRuntimeModelConfig();
   setUserSkillDirectoryForTests(null);
@@ -1527,7 +1532,7 @@ describe("agent workflow", () => {
         risk: secondTask.risk,
         reused: false,
         verified: true,
-        issues: ["飞书评论同步失败：应用缺少 task:comment:write 权限。"],
+        issues: ["飞书评论同步失败：接口拒绝写入，请检查 task:comment:write 权限、应用发布状态和可用范围；读取评论核验还需要 task:comment:read。"],
       }];
       return current;
     });

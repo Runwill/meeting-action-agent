@@ -42,11 +42,13 @@ import { AgentConversation } from "./components/AgentConversation";
 import { ApprovalTaskList } from "./components/ApprovalTaskList";
 import { ClarificationPanel } from "./components/ClarificationPanel";
 import { ExecutionLog } from "./components/ExecutionLog";
+import { FeishuPermissionGuide } from "./components/FeishuPermissionGuide";
 import { OpenItemsPanel } from "./components/OpenItemsPanel";
 import { RunInspector } from "./components/RunInspector";
 import { UserSkillsPanel } from "./components/UserSkillsPanel";
 import { TrackingPanel } from "./components/TrackingPanel";
 import { useDialogFocus } from "./hooks/useDialogFocus";
+import { copyToClipboard } from "./utils/clipboard";
 import type {
   ActionTask,
   AgentRun,
@@ -565,6 +567,10 @@ export default function App() {
   const hasFeishuCommentPermissionIssue = !!run?.created_tasks.some((task) =>
     task.connector_id === "feishu" && task.issues.some((issue) => /飞书评论同步失败|task:comment:write|task:comment:read/i.test(issue)),
   );
+  const feishuTaskPermissionFailure = run?.connector_id === "feishu" && run.state === "failed"
+    && [...run.events].reverse().some((event) => event.type === "error"
+      && event.action === "create_task_failed"
+      && /飞书(?:创建|回读|更新)任务被拒绝|task:task:|permission_denied/i.test(event.message));
   const feishuFeatureBadges = [
     { label: "创建 / 回读", value: feishuStatus.configured ? "已接入" : "待配置", active: feishuStatus.configured },
     { label: "状态 / 字段写回", value: feishuStatus.configured ? "已接入" : "待配置", active: feishuStatus.configured },
@@ -578,7 +584,6 @@ export default function App() {
     ? feishuStatus.appConsoleUrl.replace(/\/safe(?=$|[?#])/, "/auth")
     : "https://open.feishu.cn/app");
   const feishuTasklistPermissionGuide = "飞书任务清单读取失败时，请在飞书开放平台进入当前应用的“权限管理”，搜索并开通任务/任务清单读取相关权限，保存并发布应用后，回到会议行动智能体重新绑定一次飞书成员，再重新读取清单。";
-  const feishuCommentPermissionGuide = "飞书评论同步失败时，请在飞书开放平台进入当前应用的“权限管理”，搜索并开通 task:comment:write；如果还要读取评论做核验，再开通 task:comment:read。保存并发布应用后，回到会议行动智能体重新检查连接，并用测试任务再次触发状态或字段写回。";
   const feishuAppListUrl = "https://open.feishu.cn/app";
   const feishuEnvReturnUrl = `${window.location.origin}${window.location.pathname || "/"}#workflow`;
   const feishuEnvTemplate = [
@@ -652,12 +657,14 @@ export default function App() {
           : "创建任务后，再从本系统修改状态或字段，飞书任务评论区应出现对应记录。"
         : "如果飞书应用没有评论权限，主任务创建、状态写回和字段写回仍应成功；评论这一项记录权限结果。",
       details: hasFeishuCommentPermissionIssue
-        ? ["打开飞书开放平台当前应用的权限管理。", "搜索并开通 task:comment:write；需要回读核验评论时再开通 task:comment:read。", "保存并发布应用后，回到本系统重新检查连接，再用测试任务复测评论同步。"]
+        ? ["打开飞书开放平台当前应用的权限管理。", "检查 task:comment:write；如要读取评论核验，再检查 task:comment:read。若已有权限，检查应用发布与可用范围。", "保存并发布应用后，回到本系统对已有任务再次发起评论，并到飞书任务详情核对。"]
         : feishuStatus.syncComments
         ? ["创建一条飞书任务。", "从本系统把状态改为已完成，或修改标题 / 截止日期。", "打开飞书任务评论区，检查是否出现 Agent 操作记录。"]
         : ["在上方打开评论记录开关并保存。", "确认飞书应用具备任务评论权限。", "如果权限不足，系统会保留主任务写入结果。"],
       copyLabel: "复制说明",
-      copyText: hasFeishuCommentPermissionIssue ? feishuCommentPermissionGuide : "请在会议行动智能体的“平台连接 → 飞书任务写入设置”中开启操作记录。飞书应用仍需要具备任务评论相关权限，并发布到当前测试企业；开启后，Agent 创建任务、同步状态和修改字段时，会在飞书任务评论区留下简短记录。评论权限不足时，不应阻断主任务创建、字段写回和回读验证。",
+      copyText: hasFeishuCommentPermissionIssue
+        ? "飞书评论同步失败时，请在飞书开放平台当前应用的“权限管理”中检查 task:comment:write（写入评论）和 task:comment:read（读取评论核验），同时检查应用发布状态和可用范围。配置生效后，对已有任务再次发起评论并到飞书详情核对。评论接口失败不会阻断主任务操作。"
+        : "请在会议行动智能体的“平台连接 → 飞书任务写入设置”中开启操作记录。飞书应用仍需要具备 task:comment:write（写入）和 task:comment:read（读取核验）权限，并发布到当前测试企业；开启后，Agent 创建任务、同步状态和修改字段时，会在飞书任务评论区留下简短记录。评论权限不足时，不应阻断主任务创建、字段写回和回读验证。",
     },
   ];
   const feishuAdvancedReadyCount = feishuAdvancedItems.filter((item) => item.active).length;
@@ -803,12 +810,11 @@ export default function App() {
       setFeishuCopyMessage("当前还没有可复制的回调地址。");
       return;
     }
-    try {
-      await navigator.clipboard.writeText(feishuStatus.redirectUri);
+    if (await copyToClipboard(feishuStatus.redirectUri)) {
       setFeishuCopyMessage("已复制回调地址，粘贴到飞书开放平台的重定向 URL 设置中。");
       notify("已复制回调地址");
-    } catch {
-      setFeishuCopyMessage("复制失败，请手动选中下方地址复制。");
+    } else {
+      setFeishuCopyMessage("浏览器没有允许自动复制，请手动选中下方地址复制。");
     }
   }
 
@@ -817,32 +823,29 @@ export default function App() {
       setFeishuCopyMessage("当前还没有可复制的回调地址。");
       return;
     }
-    try {
-      await navigator.clipboard.writeText(feishuStatus.redirectUri);
+    if (await copyToClipboard(feishuStatus.redirectUri)) {
       setFeishuCopyMessage("已复制回调地址，并打开飞书当前应用的安全设置页。请在重定向 URL / OAuth 回调地址处粘贴保存。");
       notify("已复制并打开飞书后台");
-    } catch {
-      setFeishuCopyMessage("已打开飞书当前应用的安全设置页，但复制失败；请手动选中下方地址复制后粘贴。");
+    } else {
+      setFeishuCopyMessage("已打开飞书当前应用的安全设置页，但浏览器没有允许自动复制；请手动选中下方地址复制后粘贴。");
     }
   }
 
   async function copyFeishuOptionalSetup(text: string, label: string) {
-    try {
-      await navigator.clipboard.writeText(text);
+    if (await copyToClipboard(text)) {
       setFeishuCopyMessage(`已复制${label}说明。`);
       notify("已复制配置说明");
-    } catch {
-      setFeishuCopyMessage("复制失败，请手动选中说明文字复制。");
+    } else {
+      setFeishuCopyMessage("浏览器没有允许自动复制，请手动选中说明文字复制。");
     }
   }
 
   async function copyFeishuEnvTemplate() {
-    try {
-      await navigator.clipboard.writeText(feishuEnvTemplate);
+    if (await copyToClipboard(feishuEnvTemplate)) {
       setFeishuCopyMessage("已复制高级部署模板。普通本地演示优先使用上方表单保存，不需要手动编辑 .env。");
       notify("已复制飞书配置模板");
-    } catch {
-      setFeishuCopyMessage("复制失败，请手动复制下方 .env 模板。");
+    } else {
+      setFeishuCopyMessage("浏览器没有允许自动复制，请手动复制下方 .env 模板。");
     }
   }
 
@@ -1434,6 +1437,7 @@ export default function App() {
                       onRefresh={() => void refreshTracking()}
                       onStatusChange={(externalId, status) => void changeTaskStatus(externalId, status)}
                       onOpenPlatformConnection={() => setFeishuOpen(true)}
+                      onRefreshConnection={refreshConnectorsStatus}
                       feishuPermissionUrl={run.connector_id === "feishu" ? feishuPermissionUrl : undefined}
                     />
                   )}
@@ -1447,6 +1451,15 @@ export default function App() {
                         <button type="button" onClick={() => void approveTasks()} disabled={busy === "approve"}>{busy === "approve" ? "正在安全重试…" : "安全重试原运行"}</button>
                       </div>
                     </section>
+                  )}
+                  {feishuTaskPermissionFailure && (
+                    <FeishuPermissionGuide
+                      kind="task"
+                      failure
+                      permissionUrl={feishuPermissionUrl}
+                      onRefreshConnection={refreshConnectorsStatus}
+                      onOpenConnection={() => setFeishuOpen(true)}
+                    />
                   )}
 
                   {run.state === "completed" && (
@@ -1510,6 +1523,14 @@ export default function App() {
                   </div>
                 ))}
               </div>
+              <details className="feishu-core-permission">
+                <summary>首次创建飞书任务被拒绝？查看权限配置</summary>
+                <FeishuPermissionGuide
+                  kind="task"
+                  permissionUrl={feishuPermissionUrl}
+                  onRefreshConnection={refreshConnectorsStatus}
+                />
+              </details>
               <section className="feishu-optional-setup" aria-label="飞书任务写入设置">
                 <header>
                   <div>
@@ -1653,30 +1674,13 @@ export default function App() {
                     <small>对应飞书任务详情里的评论 / 动态。启用后，创建、状态同步和字段修改会尝试留下记录；权限不足时不阻断主写入。</small>
                   </label>
                   {(hasFeishuCommentPermissionIssue || feishuSettingsForm.syncComments) && (
-                    <div className={hasFeishuCommentPermissionIssue ? "feishu-permission-callout is-warning" : "feishu-permission-callout"} role={hasFeishuCommentPermissionIssue ? "alert" : "note"}>
-                      <div>
-                        <WarningCircle />
-                        <div>
-                          <strong>{hasFeishuCommentPermissionIssue ? "评论同步缺少飞书权限" : "评论同步还需要飞书应用权限"}</strong>
-                          <p>{hasFeishuCommentPermissionIssue
-                            ? "本系统已经保留主任务写入结果，但飞书拒绝写入评论。需要在飞书开放平台给当前应用补权限。"
-                            : "开关只代表本系统会尝试写入评论；真实飞书是否能写入，仍取决于当前应用是否开通评论权限并发布。"}</p>
-                        </div>
-                      </div>
-                      <ol>
-                        <li>打开飞书开放平台当前应用的“权限管理”。</li>
-                        <li>搜索并开通 <code>task:comment:write</code>；如需读取评论核验，再开通 <code>task:comment:read</code>。</li>
-                        <li>保存并发布应用后，回到本系统重新检查连接，再用测试任务复测状态或字段写回。</li>
-                      </ol>
-                      <div className="tasklist-help-actions">
-                        <a href={feishuPermissionUrl} target="_blank" rel="noreferrer">
-                          打开权限管理 <ArrowUpRight />
-                        </a>
-                        <button type="button" onClick={() => void copyFeishuOptionalSetup(feishuCommentPermissionGuide, "评论权限")}>
-                          复制给管理员
-                        </button>
-                      </div>
-                    </div>
+                    <FeishuPermissionGuide
+                      kind="comment"
+                      failure={hasFeishuCommentPermissionIssue}
+                      permissionUrl={feishuPermissionUrl}
+                      onRefreshConnection={refreshConnectorsStatus}
+                      compact
+                    />
                   )}
                   <div className="feishu-settings-actions">
                     <button type="button" onClick={() => void saveFeishuAdvancedSettings()} disabled={feishuSettingsBusy || !feishuStatus.configured}>

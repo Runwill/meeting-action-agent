@@ -123,6 +123,11 @@ function operationLabel(operation: "create" | "read" | "update") {
   return operation === "create" ? "创建" : operation === "read" ? "读取" : "更新";
 }
 
+function taskPermissionMessage(operation: "create" | "read" | "update") {
+  const action = operation === "create" ? "创建" : operation === "read" ? "回读" : "更新";
+  return `飞书${action}任务被拒绝：请检查应用的 task:task:write、task:task:read 权限、发布状态和可用范围；仅凭接口拒绝无法确定具体原因。配置生效后回到本系统安全重试原运行。`;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -439,7 +444,7 @@ export function createFeishuTaskConnector(
     if (!response.ok || apiCode !== 0) {
       if (response.status === 429) throw new FeishuConnectorError("rate_limited", "飞书接口触发频率限制，请稍后重试。");
       if (response.status === 401 || response.status === 403 || [1470403, 99991672].includes(apiCode)) {
-        throw new FeishuConnectorError("permission_denied", "飞书应用没有完成任务读写权限配置。");
+        throw new FeishuConnectorError("permission_denied", taskPermissionMessage(operation));
       }
       if (response.status === 404 || apiCode === 1470404) {
         throw new FeishuConnectorError("not_found", "飞书任务不存在或已被删除。");
@@ -452,7 +457,7 @@ export function createFeishuTaskConnector(
 
   const commentSyncIssue = (error: unknown) => {
     if (error instanceof FeishuConnectorError && error.code === "permission_denied") {
-      return "飞书评论同步失败：应用缺少 task:comment:write 权限。";
+      return "飞书评论同步失败：接口拒绝写入，请检查 task:comment:write 权限、应用发布状态和可用范围；读取评论核验还需要 task:comment:read。";
     }
     return "飞书评论同步失败：评论接口未成功响应。";
   };

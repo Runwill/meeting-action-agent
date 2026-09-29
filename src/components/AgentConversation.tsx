@@ -1,5 +1,5 @@
-import { ArrowRight, CheckCircle, PaperPlaneRight, Robot, UserCircle, Wrench } from "@phosphor-icons/react";
-import { useState } from "react";
+import { ArrowDown, ArrowRight, CheckCircle, PaperPlaneRight, Robot, UserCircle, Wrench } from "@phosphor-icons/react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AgentRun, ConversationTurn, PendingAgentAction, TaskFieldChanges } from "../types";
 
 type AgentConversationProps = {
@@ -195,6 +195,66 @@ function pendingActionDetails(run: AgentRun, pending: PendingAgentAction) {
 export function AgentConversation({ run, busy, error, onSend, onConfirm }: AgentConversationProps) {
   const turns = legacyTurns(run);
   const [draft, setDraft] = useState("");
+  const [awayFromBottom, setAwayFromBottom] = useState(false);
+  const [unreadReplies, setUnreadReplies] = useState(0);
+  const [recentReply, setRecentReply] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
+  const nearBottomRef = useRef(true);
+  const previousTurnsRef = useRef<{ runId: string; ids: Set<string> } | null>(null);
+  const replyTimerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (replyTimerRef.current !== null) window.clearTimeout(replyTimerRef.current);
+  }, []);
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const previous = previousTurnsRef.current;
+    previousTurnsRef.current = { runId: run.id, ids: new Set(turns.map((turn) => turn.id)) };
+    if (!list) return;
+
+    if (!previous || previous.runId !== run.id) {
+      list.scrollTop = list.scrollHeight;
+      nearBottomRef.current = true;
+      setAwayFromBottom(false);
+      setUnreadReplies(0);
+      setRecentReply(false);
+      if (replyTimerRef.current !== null) window.clearTimeout(replyTimerRef.current);
+      return;
+    }
+
+    const newTurns = turns.filter((turn) => !previous.ids.has(turn.id));
+    if (!newTurns.length) return;
+    const replies = newTurns.filter((turn) => turn.role === "assistant").length;
+    if (nearBottomRef.current) {
+      list.scrollTop = list.scrollHeight;
+    } else if (replies) {
+      setUnreadReplies((count) => count + replies);
+    }
+    if (replies) {
+      setRecentReply(true);
+      if (replyTimerRef.current !== null) window.clearTimeout(replyTimerRef.current);
+      replyTimerRef.current = window.setTimeout(() => setRecentReply(false), 5000);
+    }
+  }, [run.id, turns]);
+
+  function handleScroll() {
+    const list = listRef.current;
+    if (!list) return;
+    const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight <= 48;
+    nearBottomRef.current = nearBottom;
+    setAwayFromBottom(!nearBottom);
+    if (nearBottom) setUnreadReplies(0);
+  }
+
+  function goToBottom() {
+    const list = listRef.current;
+    if (!list) return;
+    list.scrollTo({
+      top: list.scrollHeight,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    });
+  }
 
   async function submit() {
     const content = draft.trim();
@@ -212,23 +272,25 @@ export function AgentConversation({ run, busy, error, onSend, onConfirm }: Agent
           <p className="section-label">CONVERSATION</p>
           <h3 id="conversation-title">与 Agent 的工作记录</h3>
         </div>
-        <span className="conversation-state"><i /> 运行中上下文</span>
+        <span className={`conversation-state${recentReply ? " has-reply" : ""}`} role="status" aria-live="polite"><i /> {recentReply ? "Agent 已回复" : "运行中上下文"}</span>
       </header>
-      <div className="conversation-list" role="log" aria-live="polite">
-        {turns.map((turn) => (
-          <article className={`conversation-turn is-${turn.role}`} key={turn.id}>
-            <span className="conversation-avatar" aria-hidden="true"><TurnIcon role={turn.role} /></span>
-            <div className="conversation-turn-body">
-              <header>
-                <strong>{roleLabel[turn.role]}</strong>
-                {turn.role === "assistant" && <span className="turn-source" title={typeof turn.metadata?.source_detail === "string" ? turn.metadata.source_detail : undefined}><CheckCircle weight="fill" /> {turnSourceLabel(turn)}</span>}
-                {turnModelStats(turn) && <span className="turn-model-stats" title="本轮回复实际记录到的模型调用次数和总耗时">{turnModelStats(turn)}</span>}
-                <time dateTime={turn.at}>{new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date(turn.at))}</time>
-              </header>
-              <TurnContent turn={turn} />
-            </div>
-          </article>
-        ))}
+      <div className="conversation-scroll-region">
+        <div className="conversation-list" ref={listRef} onScroll={handleScroll} role="log" aria-label="Agent 消息记录" aria-live="polite">
+          {turns.map((turn) => (
+            <article className={`conversation-turn is-${turn.role}`} key={turn.id}>
+              <span className="conversation-avatar" aria-hidden="true"><TurnIcon role={turn.role} /></span>
+              <div className="conversation-turn-body">
+                <header>
+                  <strong>{roleLabel[turn.role]}</strong>
+                  {turn.role === "assistant" && <span className="turn-source" title={typeof turn.metadata?.source_detail === "string" ? turn.metadata.source_detail : undefined}><CheckCircle weight="fill" /> {turnSourceLabel(turn)}</span>}
+                  {turnModelStats(turn) && <span className="turn-model-stats" title="本轮回复实际记录到的模型调用次数和总耗时">{turnModelStats(turn)}</span>}
+                  <time dateTime={turn.at}>{new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date(turn.at))}</time>
+                </header>
+                <TurnContent turn={turn} />
+              </div>
+            </article>
+          ))}
+        </div>
       </div>
       {pending && (
         <div className="conversation-approval" role="group" aria-label="待确认的 Agent 操作">
@@ -247,7 +309,21 @@ export function AgentConversation({ run, busy, error, onSend, onConfirm }: Agent
         </div>
       )}
       <form className="conversation-composer" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-        <label htmlFor="agent-message">给 Agent 发消息</label>
+        <div className="conversation-composer-head">
+          <label htmlFor="agent-message">给 Agent 发消息</label>
+          <button
+            className={`conversation-jump${awayFromBottom ? " is-visible" : ""}${unreadReplies ? " has-unread" : ""}`}
+            type="button"
+            onClick={goToBottom}
+            aria-label={unreadReplies ? `Agent 有 ${unreadReplies} 条新回复，回到底部` : "回到底部"}
+            aria-hidden={!awayFromBottom}
+            tabIndex={awayFromBottom ? 0 : -1}
+          >
+            {unreadReplies > 0 && <i className="conversation-jump-dot" aria-hidden="true" />}
+            <span>{unreadReplies ? `${unreadReplies} 条新回复` : "回到底部"}</span>
+            <ArrowDown aria-hidden="true" />
+          </button>
+        </div>
         <div>
           <textarea id="agent-message" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(); } }} disabled={busy || !!pending} maxLength={2000} rows={2} placeholder={pending ? "请先确认或取消待执行操作" : "补充会议信息、询问进度或说明任务状态…"} />
           <button type="submit" disabled={busy || !!pending || !draft.trim()} aria-label="发送消息" title="发送消息"><PaperPlaneRight weight="fill" /></button>

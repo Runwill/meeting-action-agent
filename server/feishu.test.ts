@@ -462,7 +462,7 @@ describe("feishu task connector", () => {
     expect(caught).toBeInstanceOf(FeishuConnectorError);
     expect(caught).toMatchObject({
       code: "permission_denied",
-      message: "飞书应用没有完成任务读写权限配置。",
+      message: "飞书创建任务被拒绝：请检查应用的 task:task:write、task:task:read 权限、发布状态和可用范围；仅凭接口拒绝无法确定具体原因。配置生效后回到本系统安全重试原运行。",
     });
     expect(String(caught)).not.toContain("private provider detail");
   });
@@ -620,7 +620,7 @@ describe("feishu task connector", () => {
 
     await expect(connector.updateTask!("feishu-guid-001", { title: "仍然可以改标题" })).resolves.toMatchObject({
       title: "仍然可以改标题",
-      issues: ["飞书评论同步失败：应用缺少 task:comment:write 权限。"],
+      issues: ["飞书评论同步失败：接口拒绝写入，请检查 task:comment:write 权限、应用发布状态和可用范围；读取评论核验还需要 task:comment:read。"],
     });
     expect(fetchImpl.mock.calls.some(([input]) => String(input).includes("/open-apis/task/v2/comments"))).toBe(true);
   });

@@ -202,6 +202,26 @@
 .task-permission-actions{display:flex;flex-wrap:wrap;gap:7px}
 .task-permission-actions a,.task-permission-actions button{min-height:32px;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:0 11px;border:1px solid rgba(255,255,255,.12);border-radius:999px;background:rgba(255,255,255,.04);color:rgba(255,255,255,.78);font-size:10px;text-decoration:none;cursor:pointer}
 .task-permission-actions a{border-color:rgba(183,243,209,.26);background:rgba(183,243,209,.08);color:#fff}
+.feishu-permission-guide{display:grid;gap:12px;margin-top:16px;padding:16px;border:1px solid rgba(255,194,210,.3);border-radius:16px;background:linear-gradient(135deg,rgba(255,93,122,.11),rgba(0,0,0,.2));color:rgba(255,255,255,.72)}
+.feishu-permission-guide.is-compact{margin-top:12px;padding:12px;gap:10px}
+.feishu-permission-heading{display:flex;align-items:flex-start;gap:10px}
+.feishu-permission-heading>svg{flex:none;margin-top:2px;color:var(--rose)}
+.feishu-permission-heading strong{display:block;color:#fff;font-size:14px;font-weight:650}
+.feishu-permission-heading p{margin:4px 0 0;color:rgba(255,255,255,.72);font-size:12px;line-height:1.55}
+.feishu-permission-scopes{display:flex;flex-wrap:wrap;gap:7px}
+.feishu-permission-scopes button{display:inline-flex;align-items:center;gap:6px;min-height:30px;padding:0 8px;border:1px solid rgba(255,255,255,.14);border-radius:8px;background:rgba(255,255,255,.06);color:#fff;cursor:pointer}
+.feishu-permission-scopes button:hover{border-color:rgba(183,243,209,.4);background:rgba(183,243,209,.1)}
+.feishu-permission-scopes code{color:#fff;font-family:Inter,sans-serif;font-size:12px;overflow-wrap:anywhere}
+.feishu-permission-scopes svg{width:12px;height:12px;color:rgba(255,255,255,.58)}
+.feishu-permission-guide ol{display:grid;gap:6px;margin:0;padding-left:19px;color:rgba(255,255,255,.75);font-size:12px;line-height:1.55}
+.feishu-permission-guide small{color:rgba(255,255,255,.62);font-size:11px;line-height:1.5}
+.feishu-permission-guide .feishu-permission-actions{display:flex;flex-wrap:wrap;gap:7px}
+.feishu-permission-guide .feishu-permission-actions a,.feishu-permission-guide .feishu-permission-actions button{min-height:36px;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:0 11px;border:1px solid rgba(255,255,255,.13);border-radius:999px;background:rgba(255,255,255,.05);color:rgba(255,255,255,.82);font-size:11px;text-decoration:none;cursor:pointer}
+.feishu-permission-guide .feishu-permission-actions a{border-color:rgba(183,243,209,.28);background:rgba(183,243,209,.09);color:#fff}
+.feishu-permission-guide .feishu-permission-actions svg{width:13px;height:13px}
+.feishu-core-permission{margin-top:16px;border-top:1px solid rgba(255,255,255,.1);padding-top:12px}
+.feishu-core-permission summary{cursor:pointer;color:rgba(255,255,255,.72);font-size:11px}
+.feishu-core-permission[open] summary{margin-bottom:2px;color:#fff}
 .tracking-status{display:grid;gap:7px}
 .tracking-status span{color:rgba(255,255,255,.36);font-size:9px}
 .tracking-status select{width:100%;min-height:44px;padding:0 11px;border:1px solid rgba(255,255,255,.14);border-radius:8px;background:#101017;color:#fff;font-size:11px}
@@ -338,11 +358,22 @@ body,.hero-title,.manifesto h2,.results-header h2,.config-head h2{letter-spacing
 .agent-conversation{min-width:0;display:flex;flex-direction:column;max-height:clamp(460px,72svh,720px)}
 .conversation-state{display:flex;align-items:center;gap:7px;color:rgba(255,255,255,.53);font-size:11px;white-space:nowrap}
 .conversation-state i{width:6px;height:6px;border-radius:50%;background:var(--mint)}
-.conversation-list{min-height:140px;display:grid;flex:1;overflow-y:auto;overscroll-behavior:contain;margin:17px -6px 0 0;padding-right:6px;border-top:1px solid var(--hairline);scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.24) transparent}
+.conversation-state.has-reply{color:var(--mint)}
+.conversation-state.has-reply i{box-shadow:0 0 0 4px rgba(183,243,209,.12)}
+.conversation-scroll-region{position:relative;display:flex;flex:1;min-height:140px;margin-top:17px;min-width:0}
+.conversation-list{min-height:0;display:grid;align-content:start;flex:1;overflow-y:auto;overscroll-behavior:contain;margin-right:-6px;padding-right:6px;border-top:1px solid var(--hairline);scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.24) transparent}
 .conversation-list::-webkit-scrollbar{width:8px}
 .conversation-list::-webkit-scrollbar-track{background:transparent}
 .conversation-list::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background:rgba(255,255,255,.22);background-clip:padding-box}
 .conversation-list::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.34);background-clip:padding-box}
+.conversation-jump{display:inline-flex;align-items:center;justify-content:flex-end;gap:7px;min-height:28px;max-width:55%;padding:2px 0 2px 8px;border:0;background:transparent;color:rgba(255,255,255,.55);font-size:11px;font-weight:500;line-height:1.35;white-space:nowrap;cursor:pointer;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(4px);transition:opacity .22s ease,transform .25s ease,color .2s ease,visibility .22s}
+.conversation-jump.is-visible{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0)}
+.conversation-jump.has-unread{color:var(--mint)}
+.conversation-jump-dot{width:5px;height:5px;flex:none;border-radius:50%;background:var(--mint);box-shadow:0 0 9px rgba(183,243,209,.5)}
+.conversation-jump svg{width:13px;height:13px;flex:none;opacity:.72}
+.conversation-jump span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.conversation-jump.is-visible:hover{color:#fff;transform:translateY(-1px)}
+.conversation-jump:focus-visible{outline:2px solid var(--violet);outline-offset:3px}
 .conversation-turn{display:grid;grid-template-columns:34px minmax(0,1fr);gap:12px;padding:17px 0;border-bottom:1px solid rgba(255,255,255,.09)}
 .conversation-avatar{width:32px;height:32px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.18);border-radius:50%;color:var(--violet)}
 .conversation-turn.is-user .conversation-avatar{color:var(--mint)}
@@ -377,15 +408,16 @@ body,.hero-title,.manifesto h2,.results-header h2,.config-head h2{letter-spacing
 .conversation-approval button{min-height:40px;padding:0 12px;border:1px solid rgba(255,255,255,.2);border-radius:6px;background:transparent;color:#fff;cursor:pointer;font-size:12px}
 .conversation-approval button.confirm-action{border-color:var(--mint);background:var(--mint);color:#09110d;font-weight:600}
 .conversation-approval button:disabled{opacity:.45;cursor:wait}
-.conversation-composer{margin-top:18px}
-.conversation-composer>label{display:block;margin-bottom:8px;color:rgba(255,255,255,.67);font-size:12px}
-.conversation-composer>div{position:relative;display:flex;align-items:flex-end;border:1px solid rgba(255,255,255,.22);border-radius:8px;background:rgba(255,255,255,.035)}
-.conversation-composer>div:focus-within{border-color:var(--violet)}
+.conversation-composer{margin-top:13px}
+.conversation-composer-head{min-height:28px;display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:5px}
+.conversation-composer-head label{color:rgba(255,255,255,.67);font-size:12px}
+.conversation-composer>div:not(.conversation-composer-head){position:relative;display:flex;align-items:flex-end;border:1px solid rgba(255,255,255,.22);border-radius:8px;background:rgba(255,255,255,.035)}
+.conversation-composer>div:not(.conversation-composer-head):focus-within{border-color:var(--violet)}
 .conversation-composer textarea{width:100%;min-height:72px;max-height:180px;padding:12px 54px 12px 13px;border:0;outline:0;resize:vertical;background:transparent;color:#fff;font-size:14px;line-height:1.55}
 .conversation-composer textarea::placeholder{color:rgba(255,255,255,.44)}
-.conversation-composer button{position:absolute;right:10px;bottom:10px;width:36px;height:36px;display:grid;place-items:center;border-radius:6px;background:#fff;color:#09090d;cursor:pointer}
-.conversation-composer button svg{width:17px;height:17px}
-.conversation-composer button:disabled{opacity:.35;cursor:not-allowed}
+.conversation-composer button[type=submit]{position:absolute;right:10px;bottom:10px;width:36px;height:36px;display:grid;place-items:center;border-radius:6px;background:#fff;color:#09090d;cursor:pointer}
+.conversation-composer button[type=submit] svg{width:17px;height:17px}
+.conversation-composer button[type=submit]:disabled{opacity:.35;cursor:not-allowed}
 .conversation-error{margin:8px 0 0;padding:9px 11px;border-left:2px solid var(--rose);border-radius:0 8px 8px 0;background:rgba(255,194,210,.06);color:var(--rose);font-size:12px;line-height:1.55}
 .inspector-interaction{padding:14px 0;border-top:1px solid var(--hairline)}
 .inspector-interaction:first-child{border-top:0}
@@ -474,7 +506,7 @@ body,.hero-title,.manifesto h2,.results-header h2,.config-head h2{letter-spacing
 
 @media(max-width:390px){
   .results-stage.has-results .results-header h2{font-size:31px}
-  .conversation-state{display:none}
+  .conversation-state{font-size:10px}
   .created-task{grid-template-columns:1fr}
   .created-task>.tracking-status{grid-column:auto}
 }
@@ -787,6 +819,8 @@ body,.hero-title,.manifesto h2,.results-header h2,.config-head h2{letter-spacing
   .feishu-tasklist-search button{width:100%}
   .tasklist-help-actions,.task-permission-actions{display:grid}
   .tasklist-help-actions a,.tasklist-help-actions button,.task-permission-actions a,.task-permission-actions button{width:100%}
+  .feishu-permission-guide .feishu-permission-actions{display:grid}
+  .feishu-permission-guide .feishu-permission-actions a,.feishu-permission-guide .feishu-permission-actions button{width:100%}
   .feishu-reminder-presets{grid-template-columns:1fr 1fr}
   .feishu-toggle-field button{width:100%;justify-content:center}
   .feishu-settings-actions{display:grid}

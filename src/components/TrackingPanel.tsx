@@ -1,5 +1,6 @@
 import { ArrowSquareOut, ArrowsClockwise, CheckCircle, Copy, WarningCircle } from "@phosphor-icons/react";
 import type { AgentState, CreatedTaskRecord, TaskStatus, TrackingSummary } from "../types";
+import { FeishuPermissionGuide } from "./FeishuPermissionGuide";
 import { SelectField } from "./SelectField";
 
 type TrackingPanelProps = {
@@ -16,6 +17,7 @@ type TrackingPanelProps = {
   onRefresh: () => void;
   onStatusChange: (externalId: string, status: TaskStatus) => void;
   onOpenPlatformConnection?: () => void;
+  onRefreshConnection?: () => void | Promise<void>;
   feishuPermissionUrl?: string;
 };
 
@@ -30,7 +32,7 @@ function hasFeishuCommentPermissionIssue(task: CreatedTaskRecord) {
   return task.connector_id === "feishu" && task.issues.some((issue) => /飞书评论同步失败|task:comment:write|task:comment:read/i.test(issue));
 }
 
-export function TrackingPanel({ state, tasks, tracking, busy, refreshing, connectorName, supportsStatusUpdate, statusOptions, statusBusyId, onRefresh, onStatusChange, onOpenPlatformConnection, feishuPermissionUrl }: TrackingPanelProps) {
+export function TrackingPanel({ state, tasks, tracking, busy, refreshing, connectorName, supportsStatusUpdate, statusOptions, statusBusyId, onRefresh, onStatusChange, onOpenPlatformConnection, onRefreshConnection, feishuPermissionUrl }: TrackingPanelProps) {
   const statusUpdateInProgress = statusBusyId !== null;
   const controlsBusy = busy || statusUpdateInProgress;
   const terminal = state === "completed" || state === "failed";
@@ -99,24 +101,14 @@ export function TrackingPanel({ state, tasks, tracking, busy, refreshing, connec
               {task.description && <details className="created-task-description"><summary>任务说明</summary><p>{task.description}</p></details>}
               {task.issues.length > 0 && <ul className="verification-issues">{task.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul>}
               {hasFeishuCommentPermissionIssue(task) && (
-                <div className="task-permission-callout" role="alert">
-                  <div>
-                    <WarningCircle weight="fill" />
-                    <div>
-                      <strong>评论权限还没配好</strong>
-                      <p>主任务创建、回读和状态同步已经保留；只有“操作记录写入飞书评论”失败。请在飞书开放平台给当前应用开通 <code>task:comment:write</code>，如需读取评论核验再开通 <code>task:comment:read</code>，发布后重新复测。</p>
-                    </div>
-                  </div>
-                  <div className="task-permission-actions">
-                    {feishuPermissionUrl && (
-                      <a href={feishuPermissionUrl} target="_blank" rel="noreferrer">
-                        <ArrowSquareOut aria-hidden="true" />
-                        打开权限管理
-                      </a>
-                    )}
-                    {onOpenPlatformConnection && <button type="button" onClick={onOpenPlatformConnection}>打开平台连接</button>}
-                  </div>
-                </div>
+                <FeishuPermissionGuide
+                  kind="comment"
+                  failure
+                  permissionUrl={feishuPermissionUrl || "https://open.feishu.cn/app"}
+                  onRefreshConnection={onRefreshConnection}
+                  onOpenConnection={onOpenPlatformConnection}
+                  compact
+                />
               )}
             </div>
             <div className="tracking-status">
